@@ -2,7 +2,8 @@
  * OceanScope India — 4D Sub-Grid Interpolation & Geodesic Teleportation Engine.
  *
  * Provides sub-grid spatial bilinear interpolation, 16-level vertical depth splining,
- * basin geometry identification, and seamless integration with FastAPI local binary cubes.
+ * basin geometry identification, physical ocean velocity vector field (u, v),
+ * and seamless integration with FastAPI local binary cubes.
  */
 import * as THREE from 'three'
 import type { OceanVariable } from './types'
@@ -81,6 +82,84 @@ export function identifyBasin(lat: number, lon: number): string {
 }
 
 /**
+ * Computes realistic geostrophic and wind-driven ocean circulation velocity (u, v in m/s)
+ * across the Indian Ocean gyres, Somali Jet, South Equatorial Current, and Agulhas stream.
+ */
+export function getOceanVelocity(
+  lat: number,
+  lon: number,
+  timeIndex = 0
+): { u: number; v: number; speed: number } {
+  let u = 0.06
+  let v = 0.02
+
+  // 1. Somali Current Jet: Powerful northeastward boundary jet (0° to 14°N, 42° to 56°E)
+  // Reaches up to 2.2 m/s during southwest monsoon peak
+  if (lat >= -2 && lat <= 14 && lon >= 42 && lon <= 58) {
+    const seasonal = 0.75 + 0.45 * Math.sin(timeIndex * 0.52)
+    const jetCore = Math.sin(((lat - (-2)) / 16) * Math.PI)
+    u = 0.65 * jetCore * seasonal
+    v = 1.15 * jetCore * seasonal
+  }
+
+  // 2. South Equatorial Current (SEC): Broad westward trade-wind drift (-22°S to -8°S, 45°E to 115°E)
+  else if (lat >= -22 && lat <= -8 && lon >= 45 && lon <= 115) {
+    const core = Math.sin(((lat - (-22)) / 14) * Math.PI)
+    u = -0.52 * core - 0.12
+    v = -0.04 * Math.sin(lon * 0.1)
+  }
+
+  // 3. Agulhas Current: Swift southward western boundary flow (-36°S to -20°S, 28°E to 44°E)
+  else if (lat >= -36 && lat <= -20 && lon >= 28 && lon <= 44) {
+    u = -0.32
+    v = -0.85
+  }
+
+  // 4. Equatorial Jets (Wyrtki Jets): Fast eastward equatorial surge (-3.5°S to 3.5°N, 58°E to 96°E)
+  else if (lat >= -3.5 && lat <= 3.5 && lon >= 58 && lon <= 96) {
+    const eq = Math.cos((lat / 3.5) * (Math.PI / 2))
+    u = 0.58 * eq
+    v = 0.02 * Math.sin(lon * 0.15)
+  }
+
+  // 5. West Australian Current: Equatorward flow along Western Australia (-35°S to -18°S, 106°E to 118°E)
+  else if (lat >= -35 && lat <= -18 && lon >= 106 && lon <= 118) {
+    u = -0.08
+    v = 0.38
+  }
+
+  // 6. Arabian Sea Great Whirl & Clockwise Gyre (6°N to 22°N, 55°E to 76°E)
+  else if (lat >= 6 && lat <= 22 && lon >= 55 && lon <= 76) {
+    const dLat = (lat - 14) / 9
+    const dLon = (lon - 66) / 10
+    // Clockwise curl: v ~ -dLon, u ~ dLat
+    u = 0.22 + dLat * 0.32
+    v = -dLon * 0.38
+  }
+
+  // 7. Bay of Bengal Circulation (8°N to 22°N, 80°E to 94°E)
+  else if (lat >= 8 && lat <= 22 && lon >= 80 && lon <= 94) {
+    const dLat = (lat - 15) / 8
+    const dLon = (lon - 87) / 8
+    u = 0.15 + dLat * 0.26
+    v = -dLon * 0.32
+  }
+
+  // 8. Antarctic Circumpolar Current (ACC): Mighty eastward roaring flow south of -38°S
+  else if (lat <= -38) {
+    u = 0.65 + Math.abs(lat + 38) * 0.06
+    v = 0.04 * Math.sin(lon * 0.2)
+  }
+
+  const speed = Math.sqrt(u * u + v * v)
+  return {
+    u: Math.round(u * 1000) / 1000,
+    v: Math.round(v * 1000) / 1000,
+    speed: Math.round(speed * 1000) / 1000,
+  }
+}
+
+/**
  * Bilinear spatial sub-grid and physical vertical thermocline estimation.
  * Acts as high-speed 0ms local fallback when backend is querying or offline.
  */
@@ -89,40 +168,50 @@ export function getSubgridLocalEstimate(lat: number, lon: number, depth: number,
   const isSouth = lat < 0
   const latFactor = Math.cos(THREE.MathUtils.degToRad(lat * 1.6))
   const lonFactor = Math.sin(THREE.MathUtils.degToRad((lon - 40) * 1.5))
-  const seasonalWave = Math.sin((timeIndex * 0.52) + (isSouth ? Math.PI : 0))
+  const seasonalWave = Math.sin(timeIndex * 0.52 + (isSouth ? Math.PI : 0))
 
   // Surface baselines
   let surfaceTemp = 28.2 + latFactor * 3.4 + seasonalWave * 1.8 + lonFactor * 0.8
   if (lat < -25) surfaceTemp = Math.max(3.0, 18.0 + (lat + 25) * 0.8)
-  if (basin.includes('Somali')) surfaceTemp -= 3.5 // Somali upwelling is colder
-  if (basin.includes('Red Sea') || basin.includes('Persian')) surfaceTemp += 2.2
+  if (basin.includes('Somali')) surfaceTemp -= 3.8 // Somali cold upwelling wedge
+  if (basin.includes('Red Sea') || basin.includes('Persian')) surfaceTemp += 2.4
 
-  let surfaceSal = 35.4 + (latFactor * 0.8) + (lonFactor * 0.6)
-  if (basin.includes('Bay of Bengal')) surfaceSal -= 2.8 // River runoff freshwater
-  if (basin.includes('Red Sea') || basin.includes('Persian')) surfaceSal += 3.8 // Extreme evaporation
+  let surfaceSal = 35.4 + latFactor * 0.8 + lonFactor * 0.6
+  if (basin.includes('Bay of Bengal')) surfaceSal -= 3.2 // Ganges/Brahmaputra freshwater plume
+  if (basin.includes('Red Sea') || basin.includes('Persian')) surfaceSal += 3.9 // Extreme desert evaporation
 
   // Depth exponential thermocline
-  const thermoclineDepth = 150 + Math.max(0, latFactor) * 80
+  const thermoclineDepth = 160 + Math.max(0, latFactor) * 80
   const tempRatio = Math.exp(-depth / thermoclineDepth)
   const currentTemp = Math.max(1.8, Math.round((surfaceTemp * tempRatio + 2.2 * (1 - tempRatio)) * 100) / 100)
   const currentSal = Math.round((surfaceSal + (1 - tempRatio) * 0.4) * 100) / 100
 
   // 16 depth stops
-  const temps = DEPTH_STOPS.map(d => {
+  const temps = DEPTH_STOPS.map((d) => {
     const r = Math.exp(-d / thermoclineDepth)
     return Math.round((surfaceTemp * r + 2.2 * (1 - r)) * 100) / 100
   })
-  const sals = DEPTH_STOPS.map(d => {
+  const sals = DEPTH_STOPS.map((d) => {
     const r = Math.exp(-d / thermoclineDepth)
     return Math.round((surfaceSal + (1 - r) * 0.4) * 100) / 100
   })
 
-  // Seabed estimate
+  // Seabed estimate from ETOPO baselines
   let seabed = -4150
   if (basin.includes('Java')) seabed = -7120
   if (basin.includes('Ridge')) seabed = -2450
   if (basin.includes('Persian')) seabed = -95
   if (basin.includes('Red Sea')) seabed = -1200
+
+  // Ocean circulation velocities
+  const vel = getOceanVelocity(lat, lon, timeIndex)
+
+  // Chlorophyll biological productivity
+  let chl = 0.12
+  if (basin.includes('Somali') || basin.includes('Arabian') && lon < 60) chl = 1.45 // Somali coastal bloom
+  else if (basin.includes('Bay of Bengal') && lat > 16) chl = 0.85 // Ganges delta outflow
+  else if (lat < -35) chl = 0.65 // Subantarctic front bloom
+  else chl = Math.max(0.03, 0.12 - Math.abs(lat + 15) * 0.005) // Subtropical gyre oligotrophic desert
 
   return {
     coordinate: { latitude: lat, longitude: lon },
@@ -133,9 +222,9 @@ export function getSubgridLocalEstimate(lat: number, lon: number, depth: number,
     requested_depth_m: depth,
     temperature_c: currentTemp,
     salinity_psu: currentSal,
-    chlorophyll_mg_m3: Math.max(0.04, Math.round((0.15 + (1 - tempRatio) * 0.05 + Math.abs(seasonalWave) * 0.12) * 100) / 100),
-    current_speed_m_s: Math.round((0.24 + Math.abs(seasonalWave) * 0.35 + (basin.includes('Somali') ? 0.8 : 0)) * 100) / 100,
-    current_vector: { u: 0.18, v: 0.12 },
+    chlorophyll_mg_m3: Math.round(chl * 100) / 100,
+    current_speed_m_s: vel.speed,
+    current_vector: { u: vel.u, v: vel.v },
     ctd_profile: {
       temperatures: temps,
       salinities: sals,
@@ -182,31 +271,35 @@ export async function querySubgridTelemetry(
 }
 
 /**
- * Colormap gradient stops matching cmocean oceanographic standards.
+ * Oceanographic Colormap Themes based on cmocean and NASA Ocean Color standards.
  */
 export const SCIENTIFIC_PALETTES = {
   temperature: {
-    name: 'cmocean thermal',
-    stops: ['#04233a', '#104e8b', '#0099cc', '#2eb872', '#f4a261', '#e76f51', '#d62828', '#ffd166'],
+    name: 'Thermal Layer (cmocean thermal)',
+    description: 'Sea Surface Temp to Deep Thermocline',
+    stops: ['#04233a', '#0d47a1', '#0099cc', '#26a69a', '#f4a261', '#e76f51', '#d62828', '#ffd166'],
     range: [2, 32],
     unit: '°C',
   },
   salinity: {
-    name: 'cmocean haline',
-    stops: ['#220033', '#491b6d', '#3f51b5', '#00acc1', '#80cbc4', '#d4e157', '#fff59d'],
-    range: [32, 38],
+    name: 'Halocline Fronts (cmocean haline)',
+    description: 'Arabian Evaporative Waters vs Bengal River Plumes',
+    stops: ['#21004b', '#4a148c', '#304ffe', '#00b0ff', '#1de9b6', '#c6ff00', '#ffea00'],
+    range: [30, 38],
     unit: 'PSU',
   },
   chlorophyll: {
-    name: 'cmocean alga',
-    stops: ['#03140b', '#0b3c22', '#1b6b3e', '#3aa655', '#7cd362', '#c7f17b', '#f9f871'],
-    range: [0.02, 2.5],
+    name: 'Phytoplankton Biomass (NASA alga)',
+    description: 'Upwelling Blooms vs Oligotrophic Ocean Desert',
+    stops: ['#020c1b', '#032030', '#0a4d3c', '#1b8a5a', '#48c774', '#95e86d', '#ffeb3b'],
+    range: [0.03, 2.5],
     unit: 'mg/m³',
   },
   currents: {
-    name: 'cmocean speed',
-    stops: ['#0b1d3a', '#1a3c6d', '#1d6f9e', '#36a9b0', '#63d39c', '#b5f16d', '#fff05a'],
-    range: [0, 2.0],
+    name: 'Streamline Circulation (cmocean speed)',
+    description: 'Active Geodesic Vector Flow (Somali Jet & Gyres)',
+    stops: ['#061a30', '#0f3c68', '#146ba2', '#1ebbd7', '#54e5b5', '#b8f772', '#ffff66'],
+    range: [0.0, 2.0],
     unit: 'm/s',
   },
 }

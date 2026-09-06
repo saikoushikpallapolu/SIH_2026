@@ -2,13 +2,192 @@ import { Line, OrbitControls, Stars } from '@react-three/drei'
 import { Canvas, useFrame, useLoader, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Suspense, useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
-import { GLOBE_RADIUS, latLngToVector3, vector3ToLatLng } from './oceanDataEngine'
+import {
+  GLOBE_RADIUS,
+  getOceanVelocity,
+  latLngToVector3,
+  vector3ToLatLng,
+} from './oceanDataEngine'
 import type { Instrument, OceanVariable, Selection, ViewMode } from './types'
 
 const RADIUS = GLOBE_RADIUS
 const EARTH_DAY_MAP = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'
 const EARTH_WATER_MASK = 'https://threejs.org/examples/textures/planets/earth_specular_2048.jpg'
 
+// Fast bounding check for dry land in Indian Ocean sector
+function isDryLand(lat: number, lon: number): boolean {
+  // Mainland Indian Subcontinent
+  if (lat > 8.5 && lat < 28 && lon > 74 && lon < 86) {
+    if (lat > 18) return true
+    if (lon > 76 && lon < 82) return true
+  }
+  // East Africa
+  if (lon < 42 && lat > -18 && lat < 12) return true
+  // Arabia
+  if (lat > 14 && lat < 30 && lon > 42 && lon < 56) return true
+  // Australia
+  if (lat < -18 && lat > -36 && lon > 115) return true
+  // Madagascar
+  if (lat > -25 && lat < -12 && lon > 44 && lon < 50) return true
+  return false
+}
+
+interface FlowParticle {
+  lat: number
+  lon: number
+  age: number
+  maxAge: number
+  speedMult: number
+}
+
+function spawnParticle(initial: boolean): FlowParticle {
+  // Distribute across major current systems
+  const region = Math.random()
+  let lat = 0
+  let lon = 75
+
+  if (region < 0.22) {
+    // Somali Jet & Western Arabian Sea
+    lat = -2 + Math.random() * 16
+    lon = 45 + Math.random() * 12
+  } else if (region < 0.44) {
+    // South Equatorial Current (SEC)
+    lat = -20 + Math.random() * 10
+    lon = 50 + Math.random() * 60
+  } else if (region < 0.60) {
+    // Agulhas Current (Mozambique/South Africa)
+    lat = -34 + Math.random() * 14
+    lon = 30 + Math.random() * 14
+  } else if (region < 0.74) {
+    // Equatorial Wyrtki Jet
+    lat = -3 + Math.random() * 6
+    lon = 60 + Math.random() * 34
+  } else if (region < 0.88) {
+    // Bay of Bengal Gyre
+    lat = 8 + Math.random() * 13
+    lon = 82 + Math.random() * 10
+  } else {
+    // Antarctic Circumpolar Current
+    lat = -43 + Math.random() * 4
+    lon = 35 + Math.random() * 75
+  }
+
+  return {
+    lat,
+    lon,
+    age: initial ? Math.floor(Math.random() * 100) : 0,
+    maxAge: 70 + Math.floor(Math.random() * 80),
+    speedMult: 0.8 + Math.random() * 0.5,
+  }
+}
+
+/**
+ * Animated Geodesic Streamline Flow Particles.
+ * Directly visualizes real Indian Ocean surface currents (u, v) rushing in real-time.
+ */
+function StreamlineParticles({ active, timeIndex }: { active: boolean; timeIndex: number }) {
+  const count = 1800
+  const pointsRef = useRef<THREE.Points>(null)
+  const geomRef = useRef<THREE.BufferGeometry>(null)
+
+  const particles = useMemo<FlowParticle[]>(() => {
+    const list: FlowParticle[] = []
+    for (let i = 0; i < count; i++) {
+      list.push(spawnParticle(true))
+    }
+    return list
+  }, [count])
+
+  const positions = useMemo(() => new Float32Array(count * 3), [count])
+  const colors = useMemo(() => new Float32Array(count * 3), [count])
+
+  useFrame((_, delta) => {
+    if (!pointsRef.current || !active) return
+    const dt = Math.min(delta, 0.05)
+
+    for (let i = 0; i < count; i++) {
+      const p = particles[i]
+      const vel = getOceanVelocity(p.lat, p.lon, timeIndex)
+
+      // Advect particle along velocity vector (u: east, v: north)
+      p.lat += vel.v * dt * 4.4 * p.speedMult
+      const cosLat = Math.max(0.2, Math.cos((p.lat * Math.PI) / 180))
+      p.lon += ((vel.u * dt * 4.4) / cosLat) * p.speedMult
+      p.age += 1
+
+      // Respawn when life expires or moves outside the ocean basin
+      if (
+        p.age > p.maxAge ||
+        p.lat < -44.5 ||
+        p.lat > 25.5 ||
+        p.lon < 22 ||
+        p.lon > 122 ||
+        isDryLand(p.lat, p.lon)
+      ) {
+        particles[i] = spawnParticle(false)
+      }
+
+      // Project onto sphere surface
+      const pos = latLngToVector3(p.lat, p.lon, RADIUS + 0.016)
+      positions[i * 3] = pos.x
+      positions[i * 3 + 1] = pos.y
+      positions[i * 3 + 2] = pos.z
+
+      // Velocity-based dynamic luminescence
+      const speedNorm = Math.min(1.0, vel.speed / 1.4)
+      const lifeFrac = p.age / p.maxAge
+      const alpha = Math.sin(lifeFrac * Math.PI)
+
+      if (speedNorm > 0.65) {
+        // Fast jet (Somali/Agulhas): Luminous yellow-gold
+        colors[i * 3] = 1.0 * alpha
+        colors[i * 3 + 1] = 0.95 * alpha
+        colors[i * 3 + 2] = 0.25 * alpha
+      } else if (speedNorm > 0.35) {
+        // Moderate current (SEC, Equatorial Jet): Brilliant electric cyan
+        colors[i * 3] = 0.15 * alpha
+        colors[i * 3 + 1] = 0.92 * alpha
+        colors[i * 3 + 2] = 1.0 * alpha
+      } else {
+        // Slow circulation: Aquamarine / soft blue
+        colors[i * 3] = 0.25 * alpha
+        colors[i * 3 + 1] = 0.7 * alpha
+        colors[i * 3 + 2] = 0.95 * alpha
+      }
+    }
+
+    if (geomRef.current) {
+      geomRef.current.attributes.position.needsUpdate = true
+      geomRef.current.attributes.color.needsUpdate = true
+    }
+  })
+
+  if (!active) return null
+
+  return (
+    <points ref={pointsRef}>
+      <bufferGeometry ref={geomRef}>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-color" args={[colors, 3]} />
+      </bufferGeometry>
+      <pointsMaterial
+        vertexColors
+        size={0.015}
+        sizeAttenuation
+        transparent
+        opacity={0.92}
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </points>
+  )
+}
+
+/**
+ * Oceanographic Multi-Theme Shader.
+ * Integrates cmocean thermal, haline (with isohaline fronts), alga (with organic blooms),
+ * and speed (with directional wave advection).
+ */
 function OceanShader({
   variable,
   depth,
@@ -59,15 +238,15 @@ function OceanShader({
           varying vec3 vNormal;
           varying vec3 vPosition;
 
-          // Perceptually uniform palettes based on cmocean standards
+          // 1. Temperature: cmocean thermal
           vec3 paletteThermal(float t) {
             vec3 c0 = vec3(0.015, 0.137, 0.227);
-            vec3 c1 = vec3(0.063, 0.306, 0.545);
+            vec3 c1 = vec3(0.05, 0.28, 0.63);
             vec3 c2 = vec3(0.0, 0.6, 0.8);
-            vec3 c3 = vec3(0.18, 0.72, 0.45);
-            vec3 c4 = vec3(0.95, 0.63, 0.38);
+            vec3 c3 = vec3(0.15, 0.72, 0.48);
+            vec3 c4 = vec3(0.96, 0.64, 0.38);
             vec3 c5 = vec3(0.91, 0.43, 0.32);
-            vec3 c6 = vec3(0.84, 0.16, 0.16);
+            vec3 c6 = vec3(0.85, 0.16, 0.16);
             vec3 c7 = vec3(1.0, 0.82, 0.4);
             if (t < 0.15) return mix(c0, c1, t / 0.15);
             if (t < 0.30) return mix(c1, c2, (t - 0.15) / 0.15);
@@ -78,95 +257,115 @@ function OceanShader({
             return mix(c6, c7, (t - 0.90) / 0.10);
           }
 
+          // 2. Salinity: cmocean haline with Bengal River plume vs Arabian Evaporative basin
           vec3 paletteHaline(float t) {
-            vec3 c0 = vec3(0.13, 0.0, 0.2);
-            vec3 c1 = vec3(0.28, 0.1, 0.42);
-            vec3 c2 = vec3(0.24, 0.32, 0.71);
-            vec3 c3 = vec3(0.0, 0.67, 0.75);
-            vec3 c4 = vec3(0.5, 0.8, 0.77);
-            vec3 c5 = vec3(0.83, 0.88, 0.34);
-            vec3 c6 = vec3(1.0, 0.96, 0.61);
-            if (t < 0.17) return mix(c0, c1, t / 0.17);
-            if (t < 0.34) return mix(c1, c2, (t - 0.17) / 0.17);
-            if (t < 0.50) return mix(c2, c3, (t - 0.34) / 0.16);
-            if (t < 0.67) return mix(c3, c4, (t - 0.50) / 0.17);
-            if (t < 0.84) return mix(c4, c5, (t - 0.67) / 0.17);
-            return mix(c5, c6, (t - 0.84) / 0.16);
+            vec3 c0 = vec3(0.13, 0.0, 0.29);   // Deep violet (<31 PSU, river plume)
+            vec3 c1 = vec3(0.24, 0.12, 0.6);   // Sapphire violet
+            vec3 c2 = vec3(0.12, 0.35, 0.82);  // Cobalt blue
+            vec3 c3 = vec3(0.0, 0.68, 0.76);   // Oceanic cyan (34-35 PSU)
+            vec3 c4 = vec3(0.38, 0.85, 0.58);  // Sea green
+            vec3 c5 = vec3(0.88, 0.88, 0.22);  // Luminous amber-lime (36.5 PSU)
+            vec3 c6 = vec3(1.0, 0.72, 0.12);   // Brilliant gold-topaz (>38 PSU, Red Sea/Arabian)
+            if (t < 0.16) return mix(c0, c1, t / 0.16);
+            if (t < 0.32) return mix(c1, c2, (t - 0.16) / 0.16);
+            if (t < 0.48) return mix(c2, c3, (t - 0.32) / 0.16);
+            if (t < 0.65) return mix(c3, c4, (t - 0.48) / 0.17);
+            if (t < 0.82) return mix(c4, c5, (t - 0.65) / 0.17);
+            return mix(c5, c6, (t - 0.82) / 0.18);
           }
 
+          // 3. Chlorophyll: NASA MODIS Ocean Color / cmocean alga
           vec3 paletteAlga(float t) {
-            vec3 c0 = vec3(0.01, 0.08, 0.04);
-            vec3 c1 = vec3(0.04, 0.23, 0.13);
-            vec3 c2 = vec3(0.1, 0.42, 0.24);
-            vec3 c3 = vec3(0.23, 0.65, 0.33);
-            vec3 c4 = vec3(0.48, 0.83, 0.38);
-            vec3 c5 = vec3(0.78, 0.94, 0.48);
-            vec3 c6 = vec3(0.97, 0.97, 0.44);
-            if (t < 0.2) return mix(c0, c1, t / 0.2);
-            if (t < 0.4) return mix(c1, c2, (t - 0.2) / 0.2);
-            if (t < 0.6) return mix(c2, c3, (t - 0.4) / 0.2);
-            if (t < 0.8) return mix(c3, c4, (t - 0.6) / 0.2);
-            return mix(c4, c6, (t - 0.8) / 0.2);
-          }
-
-          vec3 paletteSpeed(float t) {
-            vec3 c0 = vec3(0.04, 0.11, 0.22);
-            vec3 c1 = vec3(0.1, 0.23, 0.42);
-            vec3 c2 = vec3(0.11, 0.43, 0.62);
-            vec3 c3 = vec3(0.21, 0.66, 0.69);
-            vec3 c4 = vec3(0.39, 0.83, 0.61);
-            vec3 c5 = vec3(0.71, 0.94, 0.42);
-            vec3 c6 = vec3(1.0, 0.94, 0.35);
-            if (t < 0.17) return mix(c0, c1, t / 0.17);
-            if (t < 0.34) return mix(c1, c2, (t - 0.17) / 0.17);
-            if (t < 0.50) return mix(c2, c3, (t - 0.34) / 0.16);
-            if (t < 0.67) return mix(c3, c4, (t - 0.50) / 0.17);
-            if (t < 0.84) return mix(c4, c5, (t - 0.67) / 0.17);
+            vec3 c0 = vec3(0.01, 0.05, 0.11);  // Oligotrophic desert (deep indigo navy)
+            vec3 c1 = vec3(0.02, 0.18, 0.18);  // Low productivity cyan-navy
+            vec3 c2 = vec3(0.06, 0.38, 0.22);  // Moderate oceanic green
+            vec3 c3 = vec3(0.15, 0.62, 0.28);  // Productive emerald
+            vec3 c4 = vec3(0.38, 0.85, 0.32);  // Rich vibrant green
+            vec3 c5 = vec3(0.72, 0.94, 0.36);  // Luminous chartreuse bloom
+            vec3 c6 = vec3(1.0, 0.96, 0.42);   // Golden biological peak
+            if (t < 0.16) return mix(c0, c1, t / 0.16);
+            if (t < 0.32) return mix(c1, c2, (t - 0.16) / 0.16);
+            if (t < 0.48) return mix(c2, c3, (t - 0.32) / 0.16);
+            if (t < 0.66) return mix(c3, c4, (t - 0.48) / 0.18);
+            if (t < 0.84) return mix(c4, c5, (t - 0.66) / 0.18);
             return mix(c5, c6, (t - 0.84) / 0.16);
           }
 
-          float wave(vec3 p) {
-            return sin(p.x * 3.5 + uTime) * 0.3 + sin(p.y * 5.0 - uTime * 0.6) * 0.3 + sin(p.z * 4.0 + uTime * 0.8) * 0.4;
+          // 4. Currents: cmocean speed with directional flow wave advection
+          vec3 paletteSpeed(float t) {
+            vec3 c0 = vec3(0.03, 0.08, 0.18);
+            vec3 c1 = vec3(0.08, 0.22, 0.45);
+            vec3 c2 = vec3(0.1, 0.44, 0.68);
+            vec3 c3 = vec3(0.16, 0.72, 0.74);
+            vec3 c4 = vec3(0.38, 0.88, 0.58);
+            vec3 c5 = vec3(0.76, 0.96, 0.36);
+            vec3 c6 = vec3(1.0, 0.95, 0.3);
+            if (t < 0.16) return mix(c0, c1, t / 0.16);
+            if (t < 0.32) return mix(c1, c2, (t - 0.16) / 0.16);
+            if (t < 0.48) return mix(c2, c3, (t - 0.32) / 0.16);
+            if (t < 0.66) return mix(c3, c4, (t - 0.48) / 0.18);
+            if (t < 0.84) return mix(c4, c5, (t - 0.66) / 0.18);
+            return mix(c5, c6, (t - 0.84) / 0.16);
           }
 
           void main() {
             vec3 earth = texture2D(uEarthMap, vUv).rgb;
-            float water = smoothstep(0.18, 0.45, texture2D(uWaterMask, vUv).r);
+            float water = smoothstep(0.18, 0.46, texture2D(uWaterMask, vUv).r);
 
-            // Geographic coordinate metrics
-            float latFromEquator = abs(vUv.y - 0.5) * 2.0;
-            float tropicality = pow(max(0.0, cos(latFromEquator * 1.5708)), 1.3);
-            float eddy = wave(normalize(vPosition) * 4.0) * 0.5 + 0.5;
+            // Geographic metrics
+            float latFromEq = abs(vUv.y - 0.5) * 2.0;
+            float tropicality = pow(max(0.0, cos(latFromEq * 1.5708)), 1.3);
+            float lonPhase = vUv.x * 6.2831;
 
             // Physical thermocline dropoff
-            float thermocline = 1.0 - exp(-uDepth / (210.0 + tropicality * 130.0));
+            float thermocline = 1.0 - exp(-uDepth / (200.0 + tropicality * 140.0));
 
-            float normValue;
-            vec3 fieldColor;
+            vec3 fieldColor = vec3(0.0);
 
             if (uVariable < 0.5) {
-              // Temperature: warm near equator, cooler at depth
-              normValue = clamp(0.1 + tropicality * 0.88 - thermocline * 0.74 + (eddy - 0.5) * 0.08, 0.0, 1.0);
-              fieldColor = paletteThermal(normValue);
-            } else if (uVariable < 1.5) {
-              // Salinity: high in sub-tropics/Arabian, lower in Bay of Bengal/equator
-              float gyre = sin(latFromEquator * 3.1416);
-              normValue = clamp(0.28 + gyre * 0.52 + thermocline * 0.12 + (eddy - 0.5) * 0.08, 0.0, 1.0);
-              fieldColor = paletteHaline(normValue);
-            } else if (uVariable < 2.5) {
-              // Chlorophyll: coastal upwelling & sub-Antarctic fronts
-              normValue = clamp(0.15 + (1.0 - tropicality) * 0.5 + (1.0 - thermocline) * 0.3 + (eddy - 0.5) * 0.15, 0.0, 1.0);
-              fieldColor = paletteAlga(normValue);
-            } else {
-              // Current speed: intense near equator and Somali jet
-              normValue = clamp(0.18 + exp(-pow(latFromEquator / 0.24, 2.0)) * 0.55 + (eddy - 0.5) * 0.25 + (1.0 - thermocline) * 0.12, 0.0, 1.0);
-              fieldColor = paletteSpeed(normValue);
+              // TEMPERATURE (cmocean thermal): warm pool in east, cooler upwelling in west, thermocline at depth
+              float wave = sin(vPosition.x * 4.0 + uTime * 0.4) * 0.04;
+              float normVal = clamp(0.1 + tropicality * 0.88 - thermocline * 0.76 + wave, 0.0, 1.0);
+              fieldColor = paletteThermal(normVal);
+            }
+            else if (uVariable < 1.5) {
+              // SALINITY (cmocean haline):
+              // High salinity in Arabian Sea / Persian Gulf (lon < 0.55), low in Bay of Bengal (lon > 0.55)
+              float regionalEvap = (0.5 - vUv.x) * 1.8;
+              float gyre = sin(latFromEq * 3.1416);
+              float baseSal = clamp(0.32 + gyre * 0.42 + regionalEvap * 0.28 + thermocline * 0.1, 0.0, 1.0);
+
+              // Isohaline contour ridges (delicate contour lines showing density fronts)
+              float isohaline = abs(fract(baseSal * 10.0) - 0.5);
+              float contour = smoothstep(0.44, 0.48, isohaline) * 0.15;
+
+              fieldColor = paletteHaline(baseSal) + vec3(contour * 0.6, contour * 0.8, contour);
+            }
+            else if (uVariable < 2.5) {
+              // CHLOROPHYLL (NASA MODIS alga):
+              // Coastal bloom filaments and Southern Ocean front vs oligotrophic subtropical gyre
+              float coastProximity = smoothstep(0.42, 0.49, texture2D(uWaterMask, vUv).r);
+              float bloomFilament = sin(vPosition.x * 18.0 + sin(vPosition.y * 14.0 + uTime * 0.5) * 3.0) * 0.5 + 0.5;
+              float southernFront = smoothstep(0.65, 0.95, vUv.y);
+
+              float chlVal = clamp(0.04 + (1.0 - coastProximity) * 0.65 + bloomFilament * 0.28 + southernFront * 0.45 - thermocline * 0.25, 0.0, 1.0);
+              fieldColor = paletteAlga(chlVal);
+            }
+            else {
+              // CURRENTS (cmocean speed):
+              // Flow advection wavelets traveling in direction of ocean currents
+              float flowDirX = sin(vUv.y * 6.28);
+              float flowDirY = cos(vUv.x * 6.28);
+              float advection = sin(vPosition.x * 35.0 + vPosition.y * 25.0 - uTime * 3.8) * 0.5 + 0.5;
+              float jetSpeed = clamp(0.22 + exp(-pow(latFromEq / 0.25, 2.0)) * 0.55 + advection * 0.22, 0.0, 1.0);
+
+              fieldColor = paletteSpeed(jetSpeed) * (0.85 + advection * 0.35);
             }
 
             float light = max(dot(vNormal, normalize(vec3(1.0, 0.8, 1.2))), 0.0);
-            vec3 litOcean = mix(earth, fieldColor * (0.52 + light * 0.72), uOverlayStrength);
+            vec3 litOcean = mix(earth, fieldColor * (0.54 + light * 0.72), uOverlayStrength);
 
-            // Blend: crisp land boundaries without bleeding
+            // Clean land masking with zero color bleed
             gl_FragColor = vec4(mix(earth * (0.45 + light * 0.55), litOcean, water), 1.0);
           }
         `,
@@ -174,7 +373,7 @@ function OceanShader({
     [variable, earthMap, waterMask, overlayStrength]
   )
 
-  material.uniforms.uTime.value = timeIndex * 0.75
+  material.uniforms.uTime.value = timeIndex * 0.8
   material.uniforms.uDepth.value = depth
   material.uniforms.uVariable.value = ['temperature', 'salinity', 'chlorophyll', 'currents'].indexOf(variable)
   material.uniforms.uOverlayStrength.value = overlayStrength
@@ -198,41 +397,6 @@ function Atmosphere() {
         blending={THREE.AdditiveBlending}
       />
     </mesh>
-  )
-}
-
-function CurrentParticles({ active }: { active: boolean }) {
-  const points = useRef<THREE.Points>(null)
-  const positions = useMemo(() => {
-    const result = new Float32Array(900 * 3)
-    for (let i = 0; i < 900; i += 1) {
-      const lat = -28 + ((i * 31) % 64)
-      const lng = 42 + ((i * 53) % 77)
-      const v = latLngToVector3(lat, lng, RADIUS + 0.018)
-      result.set([v.x, v.y, v.z], i * 3)
-    }
-    return result
-  }, [])
-
-  useFrame(({ clock }) => {
-    if (points.current && active) points.current.rotation.y = Math.sin(clock.getElapsedTime() * 0.15) * 0.08
-  })
-
-  if (!active) return null
-  return (
-    <points ref={points}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-      </bufferGeometry>
-      <pointsMaterial
-        color="#d6fbff"
-        size={0.013}
-        sizeAttenuation
-        transparent
-        opacity={0.82}
-        blending={THREE.AdditiveBlending}
-      />
-    </points>
   )
 }
 
@@ -267,7 +431,7 @@ function Marker({
 }
 
 /**
- * Animated Sonar Ripple & Beacon that pulses on the ocean surface.
+ * Animated Holographic Sonar Beacon.
  */
 function HolographicBeacon({ selection }: { selection: Selection }) {
   const localPos = useMemo(
@@ -302,27 +466,22 @@ function HolographicBeacon({ selection }: { selection: Selection }) {
 
   return (
     <group position={localPos} quaternion={quaternion}>
-      {/* Central pin marker */}
       <mesh>
         <circleGeometry args={[0.024, 32]} />
         <meshBasicMaterial color="#00f2fe" transparent opacity={0.95} side={THREE.DoubleSide} />
       </mesh>
-      {/* Inner expanding ripple */}
       <mesh ref={ring1Ref}>
         <ringGeometry args={[0.035, 0.05, 32]} />
         <meshBasicMaterial color="#4facfe" transparent opacity={0.8} side={THREE.DoubleSide} />
       </mesh>
-      {/* Outer expanding ripple */}
       <mesh ref={ring2Ref}>
         <ringGeometry args={[0.035, 0.05, 32]} />
         <meshBasicMaterial color="#00f2fe" transparent opacity={0.6} side={THREE.DoubleSide} />
       </mesh>
-      {/* Light needle pointing outward */}
       <mesh position={[0, 0, 0.07]}>
         <cylinderGeometry args={[0.0018, 0.0018, 0.14, 8]} />
         <meshBasicMaterial color="#70e2ff" transparent opacity={0.75} />
       </mesh>
-      {/* Glowing tip */}
       <mesh position={[0, 0, 0.14]}>
         <sphereGeometry args={[0.012, 16, 16]} />
         <meshBasicMaterial color="#ffffff" />
@@ -355,11 +514,8 @@ function CameraDirector({
   useEffect(() => {
     if (teleportNonce !== undefined && teleportNonce !== lastNonce.current && globeGroupRef.current) {
       lastNonce.current = teleportNonce
-      // Vector in local globe space
       const localVec = latLngToVector3(targetPoint.latitude, targetPoint.longitude, RADIUS)
-      // Transform to world space
       const worldVec = localVec.clone().applyMatrix4(globeGroupRef.current.matrixWorld)
-      // Camera hovers at altitude 2.65 looking straight at Earth center
       targetCamPos.current = worldVec.clone().normalize().multiplyScalar(2.65)
       isTeleporting.current = true
     }
@@ -416,7 +572,6 @@ function Scene({
   const handleGlobeClick = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation()
     if (!groupRef.current) return
-    // Invert the group world transform to extract TRUE sphere coordinate
     const localPoint = groupRef.current.worldToLocal(event.point.clone())
     const coord = vector3ToLatLng(localPoint)
     onSelectPoint(coord)
@@ -455,12 +610,17 @@ function Scene({
           />
         ))}
 
-        <CurrentParticles active={variable === 'currents' || mode === 'dive'} />
+        {/* Real Geodesic Streamline Flow Particles */}
+        <StreamlineParticles
+          active={variable === 'currents' || mode === 'dive'}
+          timeIndex={timeIndex}
+        />
+
         {instruments.map((instrument) => (
           <Marker key={instrument.id} instrument={instrument} onSelect={onInstrument} />
         ))}
 
-        {/* Holographic Sonar Beacon at user's selected point */}
+        {/* Holographic Sonar Beacon at clicked spot */}
         <HolographicBeacon selection={selection} />
       </group>
 
@@ -481,7 +641,7 @@ function Scene({
         enableDamping
         dampingFactor={0.06}
         autoRotate={mode === 'explore' && !teleportNonce}
-        autoRotateSpeed={0.2}
+        autoRotateSpeed={0.18}
       />
     </>
   )

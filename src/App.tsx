@@ -294,33 +294,37 @@ export default function App() {
               <button
                 className={`var-pill ${variable === 'temperature' ? 'active' : ''}`}
                 onClick={() => setVariable('temperature')}
+                title="cmocean thermal: SST & Thermocline"
               >
                 <Thermometer size={13} />
-                <span>Temp</span>
+                <span>Thermal</span>
                 <i style={{ color: '#ff6b4a' }} />
               </button>
               <button
                 className={`var-pill ${variable === 'salinity' ? 'active' : ''}`}
                 onClick={() => setVariable('salinity')}
+                title="cmocean haline: Arabian Evaporation Basin vs Bengal River Plumes"
               >
                 <Droplets size={13} />
-                <span>Salinity</span>
+                <span>Halocline</span>
                 <i style={{ color: '#5ce5d5' }} />
               </button>
               <button
                 className={`var-pill ${variable === 'chlorophyll' ? 'active' : ''}`}
                 onClick={() => setVariable('chlorophyll')}
+                title="NASA alga: Coastal Upwelling Blooms vs Oligotrophic Desert"
               >
                 <Activity size={13} />
-                <span>Chlorophyll</span>
+                <span>Biomass</span>
                 <i style={{ color: '#7cd362' }} />
               </button>
               <button
                 className={`var-pill ${variable === 'currents' ? 'active' : ''}`}
                 onClick={() => setVariable('currents')}
+                title="cmocean speed: Active Geodesic Streamline Flow"
               >
                 <Wind size={13} />
-                <span>Currents</span>
+                <span>Streamlines</span>
                 <i style={{ color: '#00f2fe' }} />
               </button>
             </div>
@@ -339,6 +343,10 @@ export default function App() {
                 title="Select depth layer"
               />
             </div>
+          </div>
+
+          <div className="dock-theme-hint">
+            <span>THEME: <b>{palette.name}</b> · {palette.description}</span>
           </div>
 
           <div className="dock-bottom-row">

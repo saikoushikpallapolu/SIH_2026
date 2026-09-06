@@ -387,6 +387,18 @@ button {
   cursor: pointer;
 }
 
+.dock-theme-hint {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: #8ed5e8;
+  letter-spacing: 0.2px;
+  padding: 1px 2px;
+}
+
+.dock-theme-hint b {
+  color: #ffffff;
+}
+
 /* Timeline & Colorbar Row */
 .dock-bottom-row {
   display: flex;
