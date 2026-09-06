@@ -5,6 +5,8 @@ import * as THREE from 'three'
 import {
   GLOBE_RADIUS,
   getOceanVelocity,
+  isDryLand,
+  isPointInIndianOcean,
   latLngToVector3,
   vector3ToLatLng,
   computeSphericalTangent,
@@ -24,31 +26,6 @@ import type {
 const RADIUS = GLOBE_RADIUS
 const EARTH_DAY_MAP = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'
 const EARTH_WATER_MASK = 'https://threejs.org/examples/textures/planets/earth_specular_2048.jpg'
-
-// Fast bounding check for dry land across the Indian Ocean basin and surrounding continents
-export function isDryLand(lat: number, lon: number): boolean {
-  // Mainland Indian Subcontinent
-  if (lat > 8.0 && lat < 34.0 && lon > 68.0 && lon < 89.0) {
-    if (lat > 22.0) return true
-    if (lon > 73.0 && lon < 84.0 && lat > 9.0) return true
-  }
-  // Southeast Asia / Indochina / Myanmar / Malay Peninsula
-  if (lat > 1.0 && lon > 98.5) return true
-  // Arabia & Middle East
-  if (lat > 12.0 && lon < 57.0) {
-    if (lat > 20.0 && lon < 60.0) return true
-    if (lon < 50.0) return true
-  }
-  // Iran / Pakistan inland
-  if (lat > 26.0 && lon > 56.0 && lon < 74.0) return true
-  // East Africa
-  if (lon < 41.0 && lat > -25.0 && lat < 14.0) return true
-  // Madagascar
-  if (lat > -26.0 && lat < -11.0 && lon > 43.0 && lon < 51.0) return true
-  // Australia
-  if (lat < -15.0 && lat > -38.0 && lon > 114.0) return true
-  return false
-}
 
 /**
  * Creates a merged cylinder shaft + cone arrowhead BufferGeometry for 3D vector arrows.
@@ -911,42 +888,37 @@ function OceanShader({
               fieldColor = paletteAlga(chlVal);
             }
             else {
-              // Currents circulation speed field (cmocean speed)
-              float latDeg = (vUv.y - 0.5) * 180.0;
-              float lonDeg = (vUv.x - 0.5) * 360.0;
-
-              float speed = 0.12;
-
-              // Somali Boundary Jet (0° to 14°N, 42° to 58°E)
-              if (latDeg >= -2.0 && latDeg <= 14.0 && lonDeg >= 42.0 && lonDeg <= 58.0) {
-                float core = sin((latDeg + 2.0) / 16.0 * 3.14159);
-                speed = max(speed, 0.3 + 1.6 * core);
-              }
-              // South Equatorial Current (-22° to -8°S, 45° to 115°E)
-              else if (latDeg >= -22.0 && latDeg <= -8.0 && lonDeg >= 45.0 && lonDeg <= 115.0) {
-                float core = sin((latDeg + 22.0) / 14.0 * 3.14159);
-                speed = max(speed, 0.25 + 0.55 * core);
-              }
-              // Agulhas Current (-36° to -20°S, 28° to 44°E)
-              else if (latDeg >= -36.0 && latDeg <= -20.0 && lonDeg >= 28.0 && lonDeg <= 44.0) {
-                speed = max(speed, 1.45);
-              }
-              // Equatorial Wyrtki Jet (-3.5° to 3.5°, 58° to 96°E)
-              else if (latDeg >= -3.5 && latDeg <= 3.5 && lonDeg >= 58.0 && lonDeg <= 96.0) {
-                speed = max(speed, 0.85 * cos(latDeg / 3.5 * 1.5708));
-              }
-              // Antarctic Circumpolar Current
-              else if (latDeg <= -38.0) {
-                speed = max(speed, 0.95);
-              }
-
-              float speedNorm = clamp(speed / 2.0, 0.0, 1.0);
-              fieldColor = paletteSpeed(speedNorm);
+              // CURRENTS (cmocean speed):
+              // Flow advection wavelets traveling in direction of ocean currents
+              float flowDirX = sin(vUv.y * 6.28);
+              float flowDirY = cos(vUv.x * 6.28);
+              float advection = sin(vPosition.x * 35.0 + vPosition.y * 25.0 - uTime * 3.8) * 0.5 + 0.5;
+              float jetSpeed = clamp(0.22 + exp(-pow(latFromEq / 0.25, 2.0)) * 0.55 + advection * 0.22, 0.0, 1.0);
+              fieldColor = paletteSpeed(jetSpeed) * (0.85 + advection * 0.35);
             }
 
+            // GLOBAL OCEAN COVERAGE: All oceans (Pacific, Atlantic, Southern, Arctic, Indian)
+            // render continuous, physically grounded scientific fields worldwide.
             float light = max(dot(vNormal, normalize(vec3(1.0, 0.8, 1.2))), 0.0);
-            vec3 litOcean = mix(earth, fieldColor * (0.54 + light * 0.72), uOverlayStrength);
-            gl_FragColor = vec4(mix(earth * (0.45 + light * 0.55), litOcean, water), 1.0);
+
+            // Indian Ocean High-Resolution 4D Digital Twin Sector [20°E, 125°E], [-45°S, 32°N]
+            float inLon = smoothstep(0.535, 0.565, vUv.x) * (1.0 - smoothstep(0.835, 0.865, vUv.x));
+            float inLat = smoothstep(0.235, 0.265, vUv.y) * (1.0 - smoothstep(0.665, 0.695, vUv.y));
+            float inIndianOcean = inLon * inLat;
+
+            // Global base data intensity with high-resolution enhancement in the Indian Ocean twin sector
+            float overlayIntensity = mix(uOverlayStrength * 0.72, uOverlayStrength * 1.05, inIndianOcean);
+            vec3 litOcean = mix(earth, fieldColor * (0.54 + light * 0.72), overlayIntensity);
+
+            // Subtle sector perimeter indicator (soft glowing dashed outline framing the high-res twin)
+            float borderU = smoothstep(0.003, 0.0, abs(vUv.x - 0.5556)) + smoothstep(0.003, 0.0, abs(vUv.x - 0.8472));
+            float borderV = smoothstep(0.004, 0.0, abs(vUv.y - 0.2500)) + smoothstep(0.004, 0.0, abs(vUv.y - 0.6778));
+            float sectorOutline = clamp(borderU * inLat + borderV * inLon, 0.0, 1.0) * water * 0.35;
+
+            vec3 finalOcean = litOcean + vec3(0.0, 0.95, 1.0) * sectorOutline;
+
+            // Clean land masking with zero color bleed
+            gl_FragColor = vec4(mix(earth * (0.45 + light * 0.55), finalOcean, water), 1.0);
           }
         `,
       }),
@@ -1024,6 +996,7 @@ function Marker({
 }
 
 function HolographicBeacon({ selection }: { selection: Selection }) {
+  const isSector = isPointInIndianOcean(selection.latitude, selection.longitude)
   const localPos = useMemo(
     () => latLngToVector3(selection.latitude, selection.longitude, RADIUS + 0.005),
     [selection.latitude, selection.longitude]
@@ -1054,23 +1027,27 @@ function HolographicBeacon({ selection }: { selection: Selection }) {
     }
   })
 
+  const primaryColor = isSector ? '#00f2fe' : '#f59e0b'
+  const secondaryColor = isSector ? '#4facfe' : '#fbbf24'
+  const beamColor = isSector ? '#70e2ff' : '#fde68a'
+
   return (
     <group position={localPos} quaternion={quaternion}>
       <mesh>
         <circleGeometry args={[0.024, 32]} />
-        <meshBasicMaterial color="#00f2fe" transparent opacity={0.95} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={primaryColor} transparent opacity={0.95} side={THREE.DoubleSide} />
       </mesh>
       <mesh ref={ring1Ref}>
         <ringGeometry args={[0.035, 0.05, 32]} />
-        <meshBasicMaterial color="#4facfe" transparent opacity={0.8} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={secondaryColor} transparent opacity={0.8} side={THREE.DoubleSide} />
       </mesh>
       <mesh ref={ring2Ref}>
         <ringGeometry args={[0.035, 0.05, 32]} />
-        <meshBasicMaterial color="#00f2fe" transparent opacity={0.6} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={primaryColor} transparent opacity={0.6} side={THREE.DoubleSide} />
       </mesh>
       <mesh position={[0, 0, 0.07]}>
         <cylinderGeometry args={[0.0018, 0.0018, 0.14, 8]} />
-        <meshBasicMaterial color="#70e2ff" transparent opacity={0.75} />
+        <meshBasicMaterial color={beamColor} transparent opacity={0.75} />
       </mesh>
       <mesh position={[0, 0, 0.14]}>
         <sphereGeometry args={[0.012, 16, 16]} />
@@ -1177,6 +1154,43 @@ export interface GlobeSceneProps {
   onSelectCurrentSystem?: (sys: CurrentSystem) => void
 }
 
+function IndianOceanSectorBoundary() {
+  const points = useMemo(() => {
+    const pts: THREE.Vector3[] = []
+    const lonMin = 20, lonMax = 125
+    const latMin = -45, latMax = 32
+
+    // North border: lonMin -> lonMax at latMax (32°N)
+    for (let lon = lonMin; lon <= lonMax; lon += 2.5) {
+      pts.push(latLngToVector3(latMax, lon, RADIUS + 0.012))
+    }
+    // East border: latMax -> latMin at lonMax (125°E)
+    for (let lat = latMax; lat >= latMin; lat -= 2.5) {
+      pts.push(latLngToVector3(lat, lonMax, RADIUS + 0.012))
+    }
+    // South border: lonMax -> lonMin at latMin (-45°S)
+    for (let lon = lonMax; lon >= lonMin; lon -= 2.5) {
+      pts.push(latLngToVector3(latMin, lon, RADIUS + 0.012))
+    }
+    // West border: latMin -> latMax at lonMin (20°E)
+    for (let lat = latMin; lat <= latMax; lat += 2.5) {
+      pts.push(latLngToVector3(lat, lonMin, RADIUS + 0.012))
+    }
+    pts.push(latLngToVector3(latMax, lonMin, RADIUS + 0.012))
+    return pts
+  }, [])
+
+  return (
+    <Line
+      points={points}
+      color="#00f2fe"
+      lineWidth={1.0}
+      transparent
+      opacity={0.38}
+    />
+  )
+}
+
 function Scene({
   variable,
   depth,
@@ -1251,6 +1265,9 @@ function Scene({
             opacity={0.14}
           />
         ))}
+
+        {/* Indian Ocean Digital Twin Observation Boundary [20°E-125°E, 45°S-32°N] */}
+        <IndianOceanSectorBoundary />
 
         {/* 1. Real Directional Streamline Flow Streaks */}
         <StreamlineParticles

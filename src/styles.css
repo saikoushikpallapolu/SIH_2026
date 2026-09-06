@@ -261,12 +261,14 @@ button {
 
 .subgrid-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
 }
 
 .teleport-btn {
   flex: 1;
+  min-width: 90px;
   padding: 8px 12px;
   border-radius: 9px;
   background: linear-gradient(135deg, rgba(0, 242, 254, 0.25), rgba(0, 150, 255, 0.18));
@@ -285,6 +287,17 @@ button {
   box-shadow: 0 0 16px rgba(0, 242, 254, 0.35);
 }
 
+.sector-jump-btn {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.28), rgba(217, 119, 6, 0.2)) !important;
+  border: 1px solid rgba(245, 158, 11, 0.55) !important;
+  color: #fef3c7 !important;
+}
+
+.sector-jump-btn:hover {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.45), rgba(217, 119, 6, 0.35)) !important;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.4) !important;
+}
+
 .dive-action-btn {
   padding: 8px 12px;
   border-radius: 9px;
@@ -301,6 +314,48 @@ button {
 .dive-action-btn:hover {
   background: rgba(255, 255, 255, 0.15);
   border-color: rgba(255, 255, 255, 0.28);
+}
+
+.dive-action-btn:disabled,
+.dive-action-btn.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #8da4ae;
+}
+
+.dive-action-btn:disabled:hover,
+.dive-action-btn.disabled:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.global-badge {
+  margin-left: auto;
+  font-size: 9px;
+  font-family: 'DM Mono', monospace;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fbbf24;
+}
+
+.land-badge {
+  margin-left: auto;
+  font-size: 9px;
+  font-family: 'DM Mono', monospace;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
 }
 
 /* Minimalist Floating Bottom Dock */
