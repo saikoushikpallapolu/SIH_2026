@@ -1,0 +1,3 @@
+#!/bin/sh
+# OceanScope India - Pre-Push Safety Check
+python backend/scripts/sync_pipeline.py --on-push

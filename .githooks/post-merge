@@ -1,0 +1,3 @@
+#!/bin/sh
+# OceanScope India - Post-Merge Auto Data Sync
+python backend/scripts/sync_pipeline.py --on-pull
