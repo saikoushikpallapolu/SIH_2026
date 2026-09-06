@@ -22,6 +22,7 @@ import type {
   TsunamiScenario,
   ViewMode,
 } from './types'
+import OceanCurrentFlow from './OceanCurrentFlow'
 
 const RADIUS = GLOBE_RADIUS
 const EARTH_DAY_MAP = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'
@@ -157,252 +158,6 @@ function CurrentsVectorField({
         opacity={0.94}
       />
     </instancedMesh>
-  )
-}
-
-interface FlowParticle {
-  lat: number
-  lon: number
-  prevLat: number
-  prevLon: number
-  age: number
-  maxAge: number
-  speedMult: number
-}
-
-function spawnParticle(initial: boolean): FlowParticle {
-  const region = Math.random()
-  let lat = 0
-  let lon = 75
-
-  if (region < 0.24) {
-    // Somali Jet & Western Arabian Sea
-    lat = -2 + Math.random() * 16
-    lon = 45 + Math.random() * 13
-  } else if (region < 0.44) {
-    // South Equatorial Current (SEC)
-    lat = -20 + Math.random() * 10
-    lon = 50 + Math.random() * 60
-  } else if (region < 0.60) {
-    // Agulhas Current (Mozambique/South Africa)
-    lat = -34 + Math.random() * 14
-    lon = 30 + Math.random() * 14
-  } else if (region < 0.74) {
-    // Equatorial Wyrtki Jet
-    lat = -3 + Math.random() * 6
-    lon = 60 + Math.random() * 34
-  } else if (region < 0.88) {
-    // Bay of Bengal Gyre
-    lat = 8 + Math.random() * 13
-    lon = 82 + Math.random() * 10
-  } else {
-    // Antarctic Circumpolar Current
-    lat = -43 + Math.random() * 4
-    lon = 35 + Math.random() * 75
-  }
-
-  return {
-    lat,
-    lon,
-    prevLat: lat,
-    prevLon: lon,
-    age: initial ? Math.floor(Math.random() * 100) : 0,
-    maxAge: 70 + Math.floor(Math.random() * 80),
-    speedMult: 0.8 + Math.random() * 0.5,
-  }
-}
-
-/**
- * Animated Directional Streamlines with Particle Trails.
- * Renders both trailing velocity motion streaks and bright leading heads.
- */
-function StreamlineParticles({ active, timeIndex }: { active: boolean; timeIndex: number }) {
-  const count = 2200
-  const pointsRef = useRef<THREE.Points>(null)
-  const linesRef = useRef<THREE.LineSegments>(null)
-  const geomPointsRef = useRef<THREE.BufferGeometry>(null)
-  const geomLinesRef = useRef<THREE.BufferGeometry>(null)
-
-  const particles = useMemo<FlowParticle[]>(() => {
-    const list: FlowParticle[] = []
-    for (let i = 0; i < count; i++) {
-      list.push(spawnParticle(true))
-    }
-    return list
-  }, [count])
-
-  // Positions and colors for leading heads (count * 3)
-  const headPositions = useMemo(() => new Float32Array(count * 3), [count])
-  const headColors = useMemo(() => new Float32Array(count * 3), [count])
-
-  // Positions and colors for trailing streaks (2 vertices per particle: tail -> head)
-  const linePositions = useMemo(() => new Float32Array(count * 6), [count])
-  const lineColors = useMemo(() => new Float32Array(count * 6), [count])
-
-  useFrame((_, delta) => {
-    if (!active) return
-    const dt = Math.min(delta, 0.05)
-
-    for (let i = 0; i < count; i++) {
-      const p = particles[i]
-      const vel = getOceanVelocity(p.lat, p.lon, timeIndex)
-
-      p.prevLat = p.lat
-      p.prevLon = p.lon
-
-      // Advect particle along velocity vector (u: east, v: north)
-      p.lat += vel.v * dt * 4.6 * p.speedMult
-      const cosLat = Math.max(0.2, Math.cos((p.lat * Math.PI) / 180))
-      p.lon += ((vel.u * dt * 4.6) / cosLat) * p.speedMult
-      p.age += 1
-
-      // Respawn when life expires or moves outside the ocean basin
-      if (
-        p.age > p.maxAge ||
-        p.lat < -44.5 ||
-        p.lat > 25.5 ||
-        p.lon < 22 ||
-        p.lon > 122 ||
-        isDryLand(p.lat, p.lon)
-      ) {
-        particles[i] = spawnParticle(false)
-        continue
-      }
-
-      // Project head and tail positions onto sphere
-      const headPos = latLngToVector3(p.lat, p.lon, RADIUS + 0.016)
-      const tailPos = latLngToVector3(p.prevLat, p.prevLon, RADIUS + 0.015)
-
-      // Update head points
-      headPositions[i * 3] = headPos.x
-      headPositions[i * 3 + 1] = headPos.y
-      headPositions[i * 3 + 2] = headPos.z
-
-      // Update trail line segment: vertex 0 (tail) -> vertex 1 (head)
-      const lineIdx = i * 6
-      linePositions[lineIdx] = tailPos.x
-      linePositions[lineIdx + 1] = tailPos.y
-      linePositions[lineIdx + 2] = tailPos.z
-      linePositions[lineIdx + 3] = headPos.x
-      linePositions[lineIdx + 4] = headPos.y
-      linePositions[lineIdx + 5] = headPos.z
-
-      // Velocity-based dynamic luminescence
-      const speedNorm = Math.min(1.0, vel.speed / 1.4)
-      const lifeFrac = p.age / p.maxAge
-      const alpha = Math.sin(lifeFrac * Math.PI)
-
-      let cr = 0.2, cg = 0.8, cb = 1.0
-      if (speedNorm > 0.65) {
-        // Fast jet: Luminous yellow-gold
-        cr = 1.0; cg = 0.95; cb = 0.25
-      } else if (speedNorm > 0.35) {
-        // Moderate current: Electric cyan
-        cr = 0.15; cg = 0.92; cb = 1.0
-      }
-
-      headColors[i * 3] = cr * alpha
-      headColors[i * 3 + 1] = cg * alpha
-      headColors[i * 3 + 2] = cb * alpha
-
-      // Streak line: tail is faded, head is bright
-      lineColors[lineIdx] = cr * alpha * 0.15
-      lineColors[lineIdx + 1] = cg * alpha * 0.15
-      lineColors[lineIdx + 2] = cb * alpha * 0.15
-      lineColors[lineIdx + 3] = cr * alpha * 0.95
-      lineColors[lineIdx + 4] = cg * alpha * 0.95
-      lineColors[lineIdx + 5] = cb * alpha * 0.95
-    }
-
-    if (geomPointsRef.current) {
-      geomPointsRef.current.attributes.position.needsUpdate = true
-      geomPointsRef.current.attributes.color.needsUpdate = true
-    }
-    if (geomLinesRef.current) {
-      geomLinesRef.current.attributes.position.needsUpdate = true
-      geomLinesRef.current.attributes.color.needsUpdate = true
-    }
-  })
-
-  if (!active) return null
-
-  return (
-    <group>
-      {/* Trailing Directional Streaks */}
-      <lineSegments ref={linesRef}>
-        <bufferGeometry ref={geomLinesRef}>
-          <bufferAttribute attach="attributes-position" args={[linePositions, 3]} />
-          <bufferAttribute attach="attributes-color" args={[lineColors, 3]} />
-        </bufferGeometry>
-        <lineBasicMaterial
-          vertexColors
-          transparent
-          opacity={0.85}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-        />
-      </lineSegments>
-
-      {/* Leading Luminous Heads */}
-      <points ref={pointsRef}>
-        <bufferGeometry ref={geomPointsRef}>
-          <bufferAttribute attach="attributes-position" args={[headPositions, 3]} />
-          <bufferAttribute attach="attributes-color" args={[headColors, 3]} />
-        </bufferGeometry>
-        <pointsMaterial
-          vertexColors
-          size={0.016}
-          sizeAttenuation
-          transparent
-          opacity={0.95}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-        />
-      </points>
-    </group>
-  )
-}
-
-/**
- * 3D Interactive Waypoints for the 8 Major Indian Ocean Current Systems.
- * Rendered as clean, glowing 3D navigational markers without intrusive text overlays.
- */
-function CurrentSystemsWaypoints({
-  active,
-  onSelectSystem,
-}: {
-  active: boolean
-  onSelectSystem?: (sys: CurrentSystem) => void
-}) {
-  if (!active) return null
-
-  return (
-    <group>
-      {CURRENT_SYSTEMS.map((sys) => {
-        const pos = latLngToVector3(sys.lat, sys.lon, RADIUS + 0.024)
-        return (
-          <group
-            key={sys.id}
-            position={pos}
-            onClick={(e) => {
-              e.stopPropagation()
-              onSelectSystem?.(sys)
-            }}
-          >
-            {/* Luminous beacon core */}
-            <mesh>
-              <sphereGeometry args={[0.02, 16, 16]} />
-              <meshBasicMaterial color="#00e5ff" />
-            </mesh>
-            {/* Outer soft glow ring */}
-            <mesh scale={1.9}>
-              <sphereGeometry args={[0.02, 16, 16]} />
-              <meshBasicMaterial color="#00e5ff" transparent opacity={0.28} />
-            </mesh>
-          </group>
-        )
-      })}
-    </group>
   )
 }
 
@@ -888,13 +643,12 @@ function OceanShader({
               fieldColor = paletteAlga(chlVal);
             }
             else {
-              // CURRENTS (cmocean speed):
-              // Flow advection wavelets traveling in direction of ocean currents
-              float flowDirX = sin(vUv.y * 6.28);
-              float flowDirY = cos(vUv.x * 6.28);
-              float advection = sin(vPosition.x * 35.0 + vPosition.y * 25.0 - uTime * 3.8) * 0.5 + 0.5;
-              float jetSpeed = clamp(0.22 + exp(-pow(latFromEq / 0.25, 2.0)) * 0.55 + advection * 0.22, 0.0, 1.0);
-              fieldColor = paletteSpeed(jetSpeed) * (0.85 + advection * 0.35);
+              // CURRENTS BASE OCEAN:
+              // Clean, sleek, dark semi-transparent ocean surface with subtle ambient flow kinetic energy.
+              // Streamlines (Layer 2) and Luminous Particles (Layer 3) render cleanly on top.
+              float kineticCore = exp(-pow(latFromEq / 0.28, 2.0)) * 0.32;
+              float flowGlow = clamp(0.08 + kineticCore, 0.0, 1.0);
+              fieldColor = paletteSpeed(flowGlow) * 0.55;
             }
 
             // GLOBAL OCEAN COVERAGE: All oceans (Pacific, Atlantic, Southern, Arctic, Indian)
@@ -1097,7 +851,7 @@ function CameraDirector({
     }
   }, [teleportNonce, targetPoint, globeGroupRef, mode, tsunamiScenario])
 
-  // 2. Smoothly frame Indian Ocean and scenario epicenter upon entering Tsunami mode or changing scenario
+  // 2. Smoothly frame Indian Ocean upon entering Tsunami or Currents mode
   useEffect(() => {
     if (mode === 'tsunami' && (lastMode.current !== 'tsunami' || lastScenarioId.current !== tsunamiScenario?.id)) {
       lastMode.current = mode
@@ -1107,6 +861,11 @@ function CameraDirector({
         targetCamPos.current = epicVec.clone().normalize().multiplyScalar(4.4)
         isTeleporting.current = true
       }
+    } else if (mode === 'currents' && lastMode.current !== 'currents') {
+      lastMode.current = mode
+      const centerVec = latLngToVector3(3.0, 66.0, RADIUS)
+      targetCamPos.current = centerVec.clone().normalize().multiplyScalar(4.4)
+      isTeleporting.current = true
     } else {
       lastMode.current = mode
     }
@@ -1144,6 +903,10 @@ export interface GlobeSceneProps {
   teleportNonce?: number
   showVectorArrows?: boolean
   showCurrentLabels?: boolean
+  showStreamlines?: boolean
+  showParticles?: boolean
+  flowIntensity?: number
+  flowSpeed?: number
   showIsochrones?: boolean
   tsunamiHour?: number
   selectedStation?: CoastalStation | null
@@ -1200,8 +963,12 @@ function Scene({
   instruments,
   selection,
   teleportNonce,
-  showVectorArrows = true,
+  showVectorArrows = false,
   showCurrentLabels = true,
+  showStreamlines = true,
+  showParticles = true,
+  flowIntensity = 1.0,
+  flowSpeed = 1.0,
   showIsochrones = true,
   tsunamiHour = 2.0,
   tsunamiScenario = TSUNAMI_HISTORIC_DATA,
@@ -1239,7 +1006,7 @@ function Scene({
         rotation={[0, 0, 0]}
       >
         <OceanShader
-          variable={isTsunamiActive ? 'temperature' : variable}
+          variable={isTsunamiActive ? 'temperature' : (mode === 'currents' ? 'currents' : variable)}
           depth={depth}
           timeIndex={timeIndex}
           overlayStrength={isTsunamiActive ? 0.35 : overlayStrength}
@@ -1269,23 +1036,24 @@ function Scene({
         {/* Indian Ocean Digital Twin Observation Boundary [20°E-125°E, 45°S-32°N] */}
         <IndianOceanSectorBoundary />
 
-        {/* 1. Real Directional Streamline Flow Streaks */}
-        <StreamlineParticles
+        {/* Continuous Fluid Ocean Flow: Smooth Curved Streamlines & Luminous Advected Particles */}
+        <OceanCurrentFlow
           active={isCurrentsActive || mode === 'dive'}
+          depth={depth}
           timeIndex={timeIndex}
+          showStreamlines={showStreamlines}
+          showParticles={showParticles}
+          flowIntensity={flowIntensity}
+          flowSpeed={flowSpeed}
         />
 
-        {/* 2. 3D Instanced Directional Vector Arrow Field */}
-        <CurrentsVectorField
-          active={isCurrentsActive && showVectorArrows}
-          timeIndex={timeIndex}
-        />
-
-        {/* 3. Major Current Systems Interactive Markers */}
-        <CurrentSystemsWaypoints
-          active={isCurrentsActive && showCurrentLabels}
-          onSelectSystem={onSelectCurrentSystem}
-        />
+        {/* Optional 3D Vector Arrow Field (off by default) */}
+        {showVectorArrows && (
+          <CurrentsVectorField
+            active={isCurrentsActive && showVectorArrows}
+            timeIndex={timeIndex}
+          />
+        )}
 
         {/* 4. Complete Multi-Scenario Indian Ocean Tsunami Propagation Scene */}
         <TsunamiPropagationLayer
@@ -1296,8 +1064,8 @@ function Scene({
           onSelectStation={onSelectStation}
         />
 
-        {/* In-situ Observation Markers (Argo, BGC, Gliders) */}
-        {!isTsunamiActive &&
+        {/* In-situ Observation Markers (Argo, BGC, Gliders) - Explore Mode Only */}
+        {!isTsunamiActive && mode === 'explore' &&
           instruments.map((instrument) => (
             <Marker key={instrument.id} instrument={instrument} onSelect={onInstrument} />
           ))}

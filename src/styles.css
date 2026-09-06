@@ -885,6 +885,59 @@ button {
   color: #00f2fe;
 }
 
+.flow-sliders-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.flow-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.flow-slider-label {
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  color: var(--text-muted);
+  width: 68px;
+  flex-shrink: 0;
+}
+
+.flow-range {
+  flex: 1;
+  height: 4px;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.flow-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #00f2fe;
+  box-shadow: 0 0 8px #00f2fe;
+  cursor: pointer;
+}
+
+.flow-slider-val {
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  color: #70e2ff;
+  width: 34px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
 .current-systems-selector {
   display: flex;
   flex-direction: column;

@@ -68,7 +68,6 @@ function formatScenarioTime(originIso: string, hours: number): string {
 }
 
 export default function App() {
-  const [variable, setVariable] = useState<OceanVariable>('temperature')
   const [mode, setMode] = useState<ViewMode>(() => {
     try {
       const p = new URLSearchParams(window.location.search).get('mode')
@@ -76,7 +75,23 @@ export default function App() {
     } catch {}
     return 'tsunami'
   })
-  const [depth, setDepth] = useState<number>(25)
+  const [variable, setVariable] = useState<OceanVariable>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('mode')
+      if (p === 'currents') return 'currents'
+    } catch {}
+    return 'temperature'
+  })
+  const [depth, setDepth] = useState<number>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('depth')
+      if (p) {
+        const val = parseInt(p, 10)
+        if (!isNaN(val)) return val
+      }
+    } catch {}
+    return 25
+  })
   const [monthIndex, setMonthIndex] = useState<number>(292) // May 2024 pre-monsoon heatwave baseline
   const [isPlaying, setIsPlaying] = useState<boolean>(false)
   const [selection, setSelection] = useState<Selection>({ latitude: 3.316, longitude: 95.854 })
@@ -88,7 +103,11 @@ export default function App() {
   const [diveTelemetry, setDiveTelemetry] = useState({ depth: 460, temperature: 26.1 })
 
   // Currents Mode State
-  const [showVectorArrows, setShowVectorArrows] = useState<boolean>(true)
+  const [showStreamlines, setShowStreamlines] = useState<boolean>(true)
+  const [showParticles, setShowParticles] = useState<boolean>(true)
+  const [flowIntensity, setFlowIntensity] = useState<number>(1.0)
+  const [flowSpeed, setFlowSpeed] = useState<number>(1.0)
+  const [showVectorArrows, setShowVectorArrows] = useState<boolean>(false)
   const [showCurrentLabels, setShowCurrentLabels] = useState<boolean>(true)
   const [selectedCurrentSystem, setSelectedCurrentSystem] = useState<CurrentSystem | null>(null)
 
@@ -243,6 +262,10 @@ export default function App() {
             teleportNonce={teleportNonce}
             showVectorArrows={showVectorArrows}
             showCurrentLabels={showCurrentLabels}
+            showStreamlines={showStreamlines}
+            showParticles={showParticles}
+            flowIntensity={flowIntensity}
+            flowSpeed={flowSpeed}
             showIsochrones={showIsochrones}
             tsunamiHour={tsunamiHour}
             tsunamiScenario={activeScenario}
@@ -533,22 +556,54 @@ export default function App() {
             </div>
           </div>
 
-          {/* Layer Toggles */}
+          {/* Fluid Flow Streamline & Motion Controls */}
           <div className="currents-toggle-row">
             <button
-              className={`toggle-pill ${showVectorArrows ? 'active' : ''}`}
-              onClick={() => setShowVectorArrows((v) => !v)}
+              className={`toggle-pill ${showStreamlines ? 'active' : ''}`}
+              onClick={() => setShowStreamlines((v) => !v)}
+              title="Toggle continuous curved ocean flow streamlines"
             >
-              <Zap size={12} />
-              <span>3D Vector Arrows: {showVectorArrows ? 'ON' : 'OFF'}</span>
+              <Waves size={12} />
+              <span>Streamlines: {showStreamlines ? 'ON' : 'OFF'}</span>
             </button>
             <button
-              className={`toggle-pill ${showCurrentLabels ? 'active' : ''}`}
-              onClick={() => setShowCurrentLabels((v) => !v)}
+              className={`toggle-pill ${showParticles ? 'active' : ''}`}
+              onClick={() => setShowParticles((v) => !v)}
+              title="Toggle luminous flow particles and glowing trails"
             >
-              <MapPin size={12} />
-              <span>System Pins: {showCurrentLabels ? 'ON' : 'OFF'}</span>
+              <Zap size={12} />
+              <span>Particles: {showParticles ? 'ON' : 'OFF'}</span>
             </button>
+          </div>
+
+          {/* Flow Speed & Intensity Sliders */}
+          <div className="flow-sliders-wrap">
+            <div className="flow-slider-row">
+              <span className="flow-slider-label">Flow Speed</span>
+              <input
+                type="range"
+                min={0.5}
+                max={2.5}
+                step={0.1}
+                value={flowSpeed}
+                onChange={(e) => setFlowSpeed(parseFloat(e.target.value))}
+                className="flow-range"
+              />
+              <span className="flow-slider-val">{flowSpeed.toFixed(1)}x</span>
+            </div>
+            <div className="flow-slider-row">
+              <span className="flow-slider-label">Intensity</span>
+              <input
+                type="range"
+                min={0.4}
+                max={1.6}
+                step={0.1}
+                value={flowIntensity}
+                onChange={(e) => setFlowIntensity(parseFloat(e.target.value))}
+                className="flow-range"
+              />
+              <span className="flow-slider-val">{Math.round(flowIntensity * 100)}%</span>
+            </div>
           </div>
 
           {/* Major Current Systems Quick-Swoop Selector */}

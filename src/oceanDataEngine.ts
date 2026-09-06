@@ -153,89 +153,128 @@ export function identifyBasin(lat: number, lon: number): string {
 
 /**
  * Computes realistic geostrophic and wind-driven ocean circulation velocity (u, v in m/s)
- * across the Indian Ocean gyres, Somali Jet, South Equatorial Current, and Agulhas stream.
+ * across the Indian Ocean gyres, Somali Jet, South Equatorial Current, and Agulhas stream,
+ * modulated by physical vertical depth attenuation and seasonal monsoon forcing.
  */
 export function getOceanVelocity(
   lat: number,
   lon: number,
-  timeIndex = 0
+  timeIndex = 0,
+  depth = 0
 ): { u: number; v: number; speed: number } {
-  let u = 0.06
+  let u = 0.05
   let v = 0.02
 
-  // 1. Somali Current Jet: Powerful northeastward boundary jet (0° to 14°N, 42° to 56°E)
-  // Reaches up to 2.2 m/s during southwest monsoon peak
+  // Mixed layer & thermocline depth attenuation: boundary currents decay with depth
+  const surfaceAtten = Math.exp(-Math.max(0, depth) / 320)
+  const accAtten = Math.exp(-Math.max(0, depth) / 880) // ACC has deeper barotropic penetration
+  const wyrtkiAtten = Math.exp(-Math.max(0, depth) / 180) // Shallow equatorial jet
+
+  // Seasonal monsoon factor (Southwest monsoon May-Sept, Northeast monsoon Nov-Feb)
+  const month = ((timeIndex % 12) + 12) % 12
+  const summerMonsoon = Math.sin(((month - 3) / 12) * Math.PI * 2)
+
+  // 1. Somali Current & Great Whirl (0° to 14°N, 42° to 58°E)
+  // In SW monsoon (summerMonsoon > 0): powerful northward jet up to 2.2 m/s + clockwise Great Whirl
+  // In NE monsoon (summerMonsoon < 0): reverses to gentle southward flow ~0.4 m/s
   if (lat >= -2 && lat <= 14 && lon >= 42 && lon <= 58) {
-    const seasonal = 0.75 + 0.45 * Math.sin(timeIndex * 0.52)
     const jetCore = Math.sin(((lat - (-2)) / 16) * Math.PI)
-    u = 0.65 * jetCore * seasonal
-    v = 1.15 * jetCore * seasonal
+    if (summerMonsoon >= -0.2) {
+      const strength = 0.6 + 0.6 * (summerMonsoon + 0.2)
+      u = (0.55 * jetCore + 0.25 * Math.cos(lat * 0.4)) * strength * surfaceAtten
+      v = (1.25 * jetCore) * strength * surfaceAtten
+      // Clockwise curl of Great Whirl off Somalia around 7°N - 10°N
+      if (lat >= 5 && lat <= 11 && lon >= 48 && lon <= 56) {
+        const dLat = (lat - 8) / 3
+        const dLon = (lon - 52) / 4
+        u += dLat * 0.45 * surfaceAtten
+        v += -dLon * 0.55 * surfaceAtten
+      }
+    } else {
+      // Reversal in winter
+      u = -0.25 * jetCore * surfaceAtten
+      v = -0.45 * jetCore * surfaceAtten
+    }
   }
 
-  // 2. South Equatorial Current (SEC): Broad westward trade-wind drift (-22°S to -8°S, 45°E to 115°E)
-  else if (lat >= -22 && lat <= -8 && lon >= 45 && lon <= 115) {
-    const core = Math.sin(((lat - (-22)) / 14) * Math.PI)
-    u = -0.52 * core - 0.12
-    v = -0.04 * Math.sin(lon * 0.1)
+  // 2. South Equatorial Current (SEC): Broad westward trade-wind drift (-24°S to -8°S, 45°E to 118°E)
+  else if (lat >= -24 && lat <= -8 && lon >= 45 && lon <= 118) {
+    const core = Math.sin(((lat - (-24)) / 16) * Math.PI)
+    u = (-0.58 * core - 0.14) * surfaceAtten
+    v = (-0.05 * Math.sin(lon * 0.08) - 0.02) * surfaceAtten
   }
 
-  // 3. Agulhas Current: Swift southward western boundary flow (-36°S to -20°S, 28°E to 44°E)
-  else if (lat >= -36 && lat <= -20 && lon >= 28 && lon <= 44) {
-    u = -0.32
-    v = -0.85
+  // 3. Agulhas Current: Swift southward western boundary flow (-38°S to -20°S, 26°E to 44°E)
+  else if (lat >= -38 && lat <= -20 && lon >= 26 && lon <= 44) {
+    const core = Math.sin(((lat - (-38)) / 18) * Math.PI)
+    if (lat < -34) {
+      // Agulhas Retroflection: curves south then loops back east into the Indian Ocean
+      u = 0.65 * surfaceAtten
+      v = -0.35 * surfaceAtten
+    } else {
+      u = -0.38 * core * surfaceAtten
+      v = (-0.95 * core - 0.25) * surfaceAtten
+    }
   }
 
-  // 4. Equatorial Jets (Wyrtki Jets): Fast eastward equatorial surge (-3.5°S to 3.5°N, 58°E to 96°E)
-  else if (lat >= -3.5 && lat <= 3.5 && lon >= 58 && lon <= 96) {
+  // 4. Equatorial Jets (Wyrtki Jets): Eastward surges in May and November transition periods
+  else if (lat >= -3.5 && lat <= 3.5 && lon >= 55 && lon <= 98) {
     const eq = Math.cos((lat / 3.5) * (Math.PI / 2))
-    u = 0.58 * eq
-    v = 0.02 * Math.sin(lon * 0.15)
+    const isTransition = Math.max(0, Math.cos((month - 4) * (Math.PI / 6))) + Math.max(0, Math.cos((month - 10) * (Math.PI / 6)))
+    const jetSpeed = 0.35 + 0.45 * Math.min(1.0, isTransition)
+    u = (jetSpeed * eq) * wyrtkiAtten
+    v = 0.02 * Math.sin(lon * 0.15) * wyrtkiAtten
   }
 
   // 5. West Australian Current: Equatorward flow along Western Australia (-35°S to -18°S, 106°E to 118°E)
   else if (lat >= -35 && lat <= -18 && lon >= 106 && lon <= 118) {
-    u = -0.08
-    v = 0.38
+    u = -0.09 * surfaceAtten
+    v = 0.38 * surfaceAtten
   }
 
-  // 6. Arabian Sea Great Whirl & Clockwise Gyre (6°N to 22°N, 55°E to 76°E)
-  else if (lat >= 6 && lat <= 22 && lon >= 55 && lon <= 76) {
+  // 6. Arabian Sea Clockwise Circulation (6°N to 23°N, 55°E to 76°E)
+  else if (lat >= 6 && lat <= 23 && lon >= 55 && lon <= 76) {
     const dLat = (lat - 14) / 9
     const dLon = (lon - 66) / 10
-    u = 0.22 + dLat * 0.32
-    v = -dLon * 0.38
+    u = (0.24 + dLat * 0.34) * surfaceAtten
+    v = (-dLon * 0.42) * surfaceAtten
   }
 
   // 7. Bay of Bengal Circulation (8°N to 22°N, 80°E to 94°E)
   else if (lat >= 8 && lat <= 22 && lon >= 80 && lon <= 94) {
     const dLat = (lat - 15) / 8
     const dLon = (lon - 87) / 8
-    u = 0.15 + dLat * 0.26
-    v = -dLon * 0.32
+    u = (0.18 + dLat * 0.28) * surfaceAtten
+    v = (-dLon * 0.34) * surfaceAtten
   }
 
   // 8. Antarctic Circumpolar Current (ACC): Mighty eastward roaring flow south of -38°S
   else if (lat <= -38) {
-    u = 0.65 + Math.abs(lat + 38) * 0.06
-    v = 0.04 * Math.sin(lon * 0.2)
+    u = (0.68 + Math.abs(lat + 38) * 0.05) * accAtten
+    v = 0.04 * Math.sin(lon * 0.2) * accAtten
   }
 
   // 9. Pacific & Atlantic Global Gyre Circulation
   else if (lon > 125 || lon < -65) {
-    // Pacific: Westward equatorial drift, eastward North Pacific drift
-    if (lat >= -10 && lat <= 10) u = -0.42
-    else if (lat > 25 && lat < 50) u = 0.38
-    else u = -0.15
-    v = Math.sin(lat * 0.1) * 0.12
+    if (lat >= -10 && lat <= 10) u = -0.42 * surfaceAtten
+    else if (lat > 25 && lat < 50) u = 0.38 * surfaceAtten
+    else u = -0.15 * surfaceAtten
+    v = Math.sin(lat * 0.1) * 0.12 * surfaceAtten
   } else if (lon < 20 && lon >= -65) {
-    // Atlantic: Gulf Stream northward sweep
     if (lat > 20 && lat < 45 && lon < -40) {
-      u = 0.45
-      v = 0.72
+      u = 0.45 * surfaceAtten
+      v = 0.72 * surfaceAtten
     } else {
-      u = -0.22
-      v = -0.15
+      u = -0.22 * surfaceAtten
+      v = -0.15 * surfaceAtten
     }
+  }
+
+  // At abyssal depths, preserve slow physical baseline drift
+  if (depth > 600) {
+    const deepFraction = Math.min(1.0, (depth - 600) / 2000)
+    u = THREE.MathUtils.lerp(u, 0.025, deepFraction)
+    v = THREE.MathUtils.lerp(v, 0.015, deepFraction)
   }
 
   const speed = Math.sqrt(u * u + v * v)
@@ -244,6 +283,172 @@ export function getOceanVelocity(
     v: Math.round(v * 1000) / 1000,
     speed: Math.round(speed * 1000) / 1000,
   }
+}
+
+export interface StreamlinePoint {
+  x: number
+  y: number
+  z: number
+  lat: number
+  lon: number
+  speed: number
+  s: number
+}
+
+export interface StreamlineCurve {
+  id: number
+  points: StreamlinePoint[]
+  avgSpeed: number
+  system: string
+}
+
+/**
+ * Numerically integrates 4th-order Runge-Kutta curved streamlines across the Indian Ocean basin.
+ * Produces organic, continuous flowing polylines hugging the sphere at R + 0.012.
+ */
+export function generateOceanStreamlines(depth = 0, timeIndex = 0): StreamlineCurve[] {
+  // Curated organic upstream seed points distributed across major current systems
+  const seeds: { lat: number; lon: number; system: string }[] = []
+
+  // 1. Somali Boundary Jet & Horn of Africa (powerful northward flow into Arabian Sea)
+  for (let lat = -2.5; lat <= 9.5; lat += 1.2) {
+    for (let lon = 43.5; lon <= 51.5; lon += 1.4) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'somali' })
+    }
+  }
+
+  // 2. The Great Whirl (quasi-stationary anticyclonic eddy off Somalia 6°N-11°N, 50°E-56°E)
+  for (let lat = 6.5; lat <= 11.5; lat += 1.4) {
+    for (let lon = 50.0; lon <= 55.5; lon += 1.6) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'great_whirl' })
+    }
+  }
+
+  // 3. South Equatorial Current (SEC) - broad westward trade-wind conveyor across -24°S to -9°S
+  for (let lat = -23.5; lat <= -8.5; lat += 1.8) {
+    for (let lon = 52.0; lon <= 115.0; lon += 4.2) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'sec' })
+    }
+  }
+
+  // 4. Agulhas Current & Mozambique Channel (-16°S to -36°S, 28°E to 44°E)
+  for (let lat = -16.0; lat <= -36.0; lat -= 1.8) {
+    for (let lon = 29.0; lon <= 43.0; lon += 2.2) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'agulhas' })
+    }
+  }
+
+  // 5. Equatorial Wyrtki Jet (-3°S to 3°N, 56°E to 96°E)
+  for (let lat = -3.0; lat <= 3.0; lat += 1.0) {
+    for (let lon = 56.0; lon <= 95.0; lon += 3.8) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'equatorial' })
+    }
+  }
+
+  // 6. Bay of Bengal Circulation (8°N to 21°N, 80°E to 93°E)
+  for (let lat = 8.5; lat <= 20.5; lat += 1.8) {
+    for (let lon = 80.5; lon <= 93.0; lon += 2.4) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'bob' })
+    }
+  }
+
+  // 7. Arabian Sea Gyre (8°N to 23°N, 56°E to 74°E)
+  for (let lat = 8.5; lat <= 22.5; lat += 1.8) {
+    for (let lon = 56.5; lon <= 73.5; lon += 2.5) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'arabian' })
+    }
+  }
+
+  // 8. West Australian Current (-34°S to -18°S, 107°E to 117°E)
+  for (let lat = -34.0; lat <= -18.0; lat += 2.4) {
+    for (let lon = 107.0; lon <= 116.5; lon += 2.8) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'wac' })
+    }
+  }
+
+  // 9. South Indian Ocean Subtropical Gyre (-32°S to -20°S, 60°E to 95°E)
+  for (let lat = -32.0; lat <= -20.0; lat += 2.5) {
+    for (let lon = 60.0; lon <= 95.0; lon += 4.5) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'subtropical' })
+    }
+  }
+
+  // 10. Antarctic Circumpolar Current (ACC) south of -38°S
+  for (let lat = -43.5; lat <= -38.5; lat += 1.4) {
+    for (let lon = 24.0; lon <= 118.0; lon += 5.5) {
+      if (!isDryLand(lat, lon)) seeds.push({ lat, lon, system: 'acc' })
+    }
+  }
+
+  const curves: StreamlineCurve[] = []
+  const maxSteps = 48
+  const dt = 0.68 // Geodesic step parameter
+
+  seeds.forEach((seed, idx) => {
+    let curLat = seed.lat
+    let curLon = seed.lon
+    const pts: StreamlinePoint[] = []
+    let totalSpeed = 0
+
+    for (let step = 0; step < maxSteps; step++) {
+      if (isDryLand(curLat, curLon) || curLat < -45 || curLat > 27 || curLon < 22 || curLon > 124) {
+        break
+      }
+
+      // RK4 integration on spherical surface
+      const v1 = getOceanVelocity(curLat, curLon, timeIndex, depth)
+
+      const lat2 = curLat + (v1.v * dt * 0.5 * 1.8)
+      const cos1 = Math.max(0.2, Math.cos((curLat * Math.PI) / 180))
+      const lon2 = curLon + ((v1.u * dt * 0.5 * 1.8) / cos1)
+      const v2 = getOceanVelocity(lat2, lon2, timeIndex, depth)
+
+      const lat3 = curLat + (v2.v * dt * 0.5 * 1.8)
+      const cos2 = Math.max(0.2, Math.cos((lat2 * Math.PI) / 180))
+      const lon3 = curLon + ((v2.u * dt * 0.5 * 1.8) / cos2)
+      const v3 = getOceanVelocity(lat3, lon3, timeIndex, depth)
+
+      const lat4 = curLat + (v3.v * dt * 1.8)
+      const cos3 = Math.max(0.2, Math.cos((lat3 * Math.PI) / 180))
+      const lon4 = curLon + ((v3.u * dt * 1.8) / cos3)
+      const v4 = getOceanVelocity(lat4, lon4, timeIndex, depth)
+
+      const dLat = (dt / 6) * (v1.v + 2 * v2.v + 2 * v3.v + v4.v) * 1.8
+      const dLon = (dt / 6) * ((v1.u + 2 * v2.u + 2 * v3.u + v4.u) / cos1) * 1.8
+
+      const pos = latLngToVector3(curLat, curLon, GLOBE_RADIUS + 0.012)
+      pts.push({
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        lat: curLat,
+        lon: curLon,
+        speed: v1.speed,
+        s: step / maxSteps,
+      })
+
+      totalSpeed += v1.speed
+      curLat += dLat
+      curLon += dLon
+    }
+
+    if (pts.length >= 6) {
+      // Re-normalize path parameter s from 0.0 to 1.0 along the actual polyline
+      const n = pts.length
+      pts.forEach((p, i) => {
+        p.s = i / (n - 1)
+      })
+
+      curves.push({
+        id: idx,
+        points: pts,
+        avgSpeed: totalSpeed / n,
+        system: seed.system,
+      })
+    }
+  })
+
+  return curves
 }
 
 /**
@@ -302,7 +507,7 @@ export function getSubgridLocalEstimate(lat: number, lon: number, depth: number,
     if (basin.includes('Pacific')) seabed = -4800
   }
 
-  const vel = isLand ? { speed: 0, u: 0, v: 0 } : getOceanVelocity(lat, lon, timeIndex)
+  const vel = isLand ? { speed: 0, u: 0, v: 0 } : getOceanVelocity(lat, lon, timeIndex, depth)
 
   let chl = isLand ? 0.0 : 0.14
   if (!isLand) {
