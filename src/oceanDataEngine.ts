@@ -6,7 +6,7 @@
  * and seamless integration with FastAPI local binary cubes.
  */
 import * as THREE from 'three'
-import type { OceanVariable } from './types'
+import type { OceanVariable, TsunamiScenario } from './types'
 
 export const GLOBE_RADIUS = 1.55
 export const API_BASE = 'http://127.0.0.1:8000'
@@ -34,25 +34,30 @@ export interface SubgridTelemetry {
 
 /**
  * Converts Geographic (Lat, Lon) to 3D Cartesian coordinates on a sphere.
+ * Exactly matches Three.js standard SphereGeometry with equirectangular textures:
+ * Equator is Y=0, North Pole is +Y, Greenwich (0° Lon) is +X, 90°E (Indian Ocean) is -Z, 90°W is +Z.
  */
 export function latLngToVector3(latitude: number, longitude: number, radius = GLOBE_RADIUS): THREE.Vector3 {
-  const lat = THREE.MathUtils.degToRad(latitude)
-  const lng = THREE.MathUtils.degToRad(longitude)
+  const phi = (90 - latitude) * (Math.PI / 180)
+  const theta = (longitude + 180) * (Math.PI / 180)
   return new THREE.Vector3(
-    radius * Math.cos(lat) * Math.cos(lng),
-    radius * Math.sin(lat),
-    radius * Math.cos(lat) * Math.sin(lng)
+    -(radius * Math.sin(phi) * Math.cos(theta)),
+    radius * Math.cos(phi),
+    radius * Math.sin(phi) * Math.sin(theta)
   )
 }
 
 /**
  * Converts 3D Cartesian coordinates on a sphere back to Geographic (Lat, Lon).
- * NOTE: Ensure the input vector is in the local sphere coordinate space!
  */
 export function vector3ToLatLng(point: THREE.Vector3): { latitude: number; longitude: number } {
   const p = point.clone().normalize()
-  const lat = THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, p.y))))
-  const lon = THREE.MathUtils.radToDeg(Math.atan2(p.z, p.x))
+  const phi = Math.acos(Math.max(-1, Math.min(1, p.y)))
+  const lat = 90 - phi * (180 / Math.PI)
+  let theta = Math.atan2(p.z, -p.x)
+  let lon = theta * (180 / Math.PI) - 180
+  while (lon <= -180) lon += 360
+  while (lon > 180) lon -= 360
   return {
     latitude: Math.round(lat * 10000) / 10000,
     longitude: Math.round(lon * 10000) / 10000,
@@ -303,3 +308,415 @@ export const SCIENTIFIC_PALETTES = {
     unit: 'm/s',
   },
 }
+
+/**
+ * Computes exact 3D Cartesian position, unit tangent velocity direction,
+ * and Three.js orientation quaternion for an arrow or flow vector on the sphere.
+ */
+export function computeSphericalTangent(
+  lat: number,
+  lon: number,
+  u: number,
+  v: number,
+  radius = GLOBE_RADIUS
+): { position: THREE.Vector3; direction: THREE.Vector3; quaternion: THREE.Quaternion; speed: number } {
+  const phi = (90 - lat) * (Math.PI / 180)
+  const theta = (lon + 180) * (Math.PI / 180)
+
+  // Position on globe surface matching SphereGeometry
+  const pos = new THREE.Vector3(
+    -(radius * Math.sin(phi) * Math.cos(theta)),
+    radius * Math.cos(phi),
+    radius * Math.sin(phi) * Math.sin(theta)
+  )
+
+  // Tangent frame on Three.js SphereGeometry:
+  // East unit tangent vector: (sin(theta), 0, cos(theta))
+  const tEast = new THREE.Vector3(Math.sin(theta), 0, Math.cos(theta))
+  // North unit tangent vector: (cos(phi)*cos(theta), sin(phi), -cos(phi)*sin(theta))
+  const tNorth = new THREE.Vector3(
+    Math.cos(phi) * Math.cos(theta),
+    Math.sin(phi),
+    -Math.cos(phi) * Math.sin(theta)
+  )
+
+  // 3D velocity vector in spherical tangent plane
+  const v3D = new THREE.Vector3()
+    .addScaledVector(tEast, u)
+    .addScaledVector(tNorth, v)
+
+  const speed = v3D.length()
+  const dir = speed > 0.0001 ? v3D.clone().normalize() : tEast.clone()
+
+  // Three.js quaternion rotating default arrow (+Y axis) to match dir
+  const q = new THREE.Quaternion()
+  q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
+
+  return { position: pos, direction: dir, quaternion: q, speed }
+}
+
+/**
+ * Calculates compass heading bearing (0..360 deg) and cardinal direction from (u, v).
+ */
+export function getCompassHeading(u: number, v: number): { deg: number; label: string; knots: number } {
+  const speed = Math.sqrt(u * u + v * v)
+  const deg = (Math.round((Math.atan2(u, v) * 180) / Math.PI) + 360) % 360
+  const cardinals = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+  const idx = Math.round(deg / 22.5) % 16
+  return {
+    deg,
+    label: `${deg.toString().padStart(3, '0')}° ${cardinals[idx]}`,
+    knots: Math.round(speed * 1.94384 * 100) / 100,
+  }
+}
+
+/**
+ * The 8 Definitive Ocean Current Systems of the Indian Ocean Basin.
+ */
+export const CURRENT_SYSTEMS = [
+  {
+    id: 'somali_jet',
+    name: 'Somali Boundary Jet',
+    lat: 8.5,
+    lon: 51.5,
+    description: 'Intense northeastward western boundary jet. Accelerates to >2.2 m/s during the SW monsoon, driving massive coastal upwelling, cold water wedges, and high biological productivity.',
+    seasonality: 'SW Summer Monsoon Peak (June–Sept)',
+    typicalSpeed: '1.4 – 2.2 m/s',
+    flowDirection: 'Northeastward (045°)',
+  },
+  {
+    id: 'great_whirl',
+    name: 'The Great Whirl',
+    lat: 9.5,
+    lon: 54.0,
+    description: 'Quasi-stationary anticyclonic eddy off Somalia spanning 400 km across, with violent clockwise currents and deep thermocline depression.',
+    seasonality: 'Southwest Monsoon (July–Oct)',
+    typicalSpeed: '1.5 – 2.4 m/s',
+    flowDirection: 'Clockwise Anticyclonic',
+  },
+  {
+    id: 'wyrtki_jets',
+    name: 'Equatorial Wyrtki Jets',
+    lat: 0.0,
+    lon: 76.0,
+    description: 'Semi-annual eastward jet rushing directly along the equator during inter-monsoon transitions (May & Nov), surging warm surface waters to Sumatra.',
+    seasonality: 'Spring & Fall Transitions (May, Nov)',
+    typicalSpeed: '0.8 – 1.3 m/s',
+    flowDirection: 'Due East (090°)',
+  },
+  {
+    id: 'sec',
+    name: 'South Equatorial Current (SEC)',
+    lat: -14.0,
+    lon: 72.0,
+    description: 'Broad, powerful westward trade-wind stream transporting water from Indonesia across the entire tropical basin into the Madagascar and Agulhas streams.',
+    seasonality: 'Perennial Year-Round',
+    typicalSpeed: '0.4 – 0.7 m/s',
+    flowDirection: 'Due West (270°)',
+  },
+  {
+    id: 'agulhas',
+    name: 'Agulhas Current',
+    lat: -31.0,
+    lon: 32.5,
+    description: 'One of the most energetic boundary currents on Earth (>1.6 m/s), hugging the southeastern African shelf before retroflecting back east into the Indian Ocean.',
+    seasonality: 'Perennial with Giant Meanders',
+    typicalSpeed: '1.2 – 1.8 m/s',
+    flowDirection: 'Southwestward (220°)',
+  },
+  {
+    id: 'eicc',
+    name: 'East India Coastal Current (EICC)',
+    lat: 15.0,
+    lon: 82.5,
+    description: 'Western boundary current of the Bay of Bengal, flowing northward along the Andhra/Odisha coast in spring and reversing southward in autumn.',
+    seasonality: 'Biannual Reversing (North in Mar-May, South in Oct-Dec)',
+    typicalSpeed: '0.5 – 1.0 m/s',
+    flowDirection: 'Northward / Southward Reversal',
+  },
+  {
+    id: 'wicc',
+    name: 'West India Coastal Current (WICC)',
+    lat: 14.0,
+    lon: 73.0,
+    description: 'Flows southward along India’s Konkan and Malabar coast during the summer monsoon, reversing northward during the winter NE monsoon.',
+    seasonality: 'Biannual Reversing',
+    typicalSpeed: '0.3 – 0.6 m/s',
+    flowDirection: 'Southward in Summer / Northward in Winter',
+  },
+  {
+    id: 'acc',
+    name: 'Antarctic Circumpolar Current',
+    lat: -42.0,
+    lon: 65.0,
+    description: 'The planet’s mightiest volumetric current, roaring relentlessly eastward around the globe south of the subtropical front.',
+    seasonality: 'Continuous Year-Round',
+    typicalSpeed: '0.6 – 1.0 m/s',
+    flowDirection: 'Due East (090°)',
+  },
+]
+
+/**
+ * Definitive Indian Ocean Historical Tsunami Propagation Catalog.
+ * 1. 2004 Sumatra-Andaman Mega-Tsunami (Mw 9.1)
+ * 2. 1945 Makran Tsunami, Arabian Sea (Mw 8.1)
+ * 3. 2012 Wharton Basin Strike-Slip Tsunami (Mw 8.6)
+ * 4. 1883 Krakatoa Volcanic Megatsunami (VEI 6)
+ */
+export const TSUNAMI_SCENARIOS: TsunamiScenario[] = [
+  {
+    id: '2004_sumatra',
+    title: '2004 Sumatra-Andaman Mega-Tsunami',
+    shortName: '2004 Sumatra (Mw 9.1)',
+    year: 2004,
+    origin_time: '2004-12-26T00:58:53Z',
+    origin_time_label: '26 Dec 2004 · 00:58:53 UTC (06:28 IST)',
+    magnitude: 9.1,
+    depth_km: 30.0,
+    mechanism: 'Megathrust Subduction (India Plate subducting beneath Burma Plate; up to 20m vertical seafloor slip)',
+    epicenter: {
+      latitude: 3.316,
+      longitude: 95.854,
+      location_name: 'Off West Coast of Northern Sumatra, Indonesia',
+    },
+    rupture_length_km: 1300,
+    rupture_duration_sec: 500,
+    rupture_arc: [
+      { lat: 2.50, lon: 96.00, name: 'Simeulue Island (South End)' },
+      { lat: 3.316, lon: 95.854, name: 'Epicenter (Mw 9.1 Rupture)' },
+      { lat: 5.20, lon: 94.60, name: 'North Sumatra Shelf' },
+      { lat: 7.00, lon: 93.80, name: 'Great Nicobar Trench' },
+      { lat: 9.20, lon: 92.90, name: 'Car Nicobar Trench' },
+      { lat: 11.50, lon: 92.60, name: 'South Andaman Trench' },
+      { lat: 13.80, lon: 92.90, name: 'North Andaman (Rupture End)' },
+    ],
+    open_ocean_speed_kmh: 740,
+    max_runup_m: 31.0,
+    total_fatalities: '~227,898 across 14 Indian Ocean nations',
+    description: 'The deadliest tsunami in recorded human history. A colossal 1,300 km megathrust fault rupture unleased massive trans-oceanic shockwaves that traversed the entire Indian Ocean basin in under 8 hours, devastating coastlines across Southeast Asia, India, Sri Lanka, and East Africa.',
+    incois_significance: 'Primary catalyst for establishing the Indian Tsunami Early Warning Centre (ITEWC) at INCOIS, Hyderabad in 2007, operating real-time BPR ocean sensors and numerical wave propagation modeling.',
+    isochrones: [
+      { hour: 1.0, radius_km: 740, label: '1h: Andaman & Nicobar, North Sumatra' },
+      { hour: 2.0, radius_km: 1480, label: '2h: Sri Lanka East Coast' },
+      { hour: 3.0, radius_km: 2220, label: '3h: Tamil Nadu (Chennai/Nagapattinam), Maldives' },
+      { hour: 4.0, radius_km: 2960, label: '4h: Central Indian Basin' },
+      { hour: 6.0, radius_km: 4440, label: '6h: Seychelles Approach' },
+      { hour: 8.0, radius_km: 5920, label: '8h: East African Coast (Somalia, Kenya)' },
+      { hour: 10.0, radius_km: 7400, label: '10h: Madagascar, South Africa' },
+    ],
+    coastal_stations: [
+      { id: 'station_meulaboh', name: 'Meulaboh', region: 'Sumatra, Indonesia', lat: 4.145, lon: 96.128, dist_km: 140, arrival_hours: 0.25, arrival_utc: '01:14 UTC', wave_height_m: 28.5, status: 'Catastrophic Inundation' },
+      { id: 'station_banda_aceh', name: 'Banda Aceh', region: 'Sumatra, Indonesia', lat: 5.548, lon: 95.323, dist_km: 250, arrival_hours: 0.35, arrival_utc: '01:20 UTC', wave_height_m: 31.0, status: 'Catastrophic Inundation' },
+      { id: 'station_car_nicobar', name: 'Car Nicobar', region: 'Nicobar, India', lat: 9.150, lon: 92.810, dist_km: 720, arrival_hours: 0.50, arrival_utc: '01:29 UTC', wave_height_m: 7.2, status: 'Severe Submergence' },
+      { id: 'station_port_blair', name: 'Port Blair', region: 'Andaman, India', lat: 11.667, lon: 92.733, dist_km: 980, arrival_hours: 0.65, arrival_utc: '01:38 UTC', wave_height_m: 5.8, status: 'Major Coastal Surge' },
+      { id: 'station_phuket', name: 'Phuket', region: 'Andaman Coast, Thailand', lat: 7.880, lon: 98.392, dist_km: 580, arrival_hours: 1.75, arrival_utc: '02:44 UTC', wave_height_m: 5.5, status: 'Severe Beach Surge' },
+      { id: 'station_trincomalee', name: 'Trincomalee', region: 'Sri Lanka East', lat: 8.587, lon: 81.215, dist_km: 1720, arrival_hours: 1.95, arrival_utc: '02:56 UTC', wave_height_m: 6.2, status: 'Catastrophic Surge' },
+      { id: 'station_galle', name: 'Galle', region: 'Southern Sri Lanka', lat: 6.053, lon: 80.221, dist_km: 1780, arrival_hours: 2.05, arrival_utc: '03:02 UTC', wave_height_m: 8.5, status: 'Catastrophic Inundation' },
+      { id: 'station_chennai', name: 'Chennai (Marina)', region: 'Tamil Nadu, India', lat: 13.082, lon: 80.270, dist_km: 2100, arrival_hours: 2.15, arrival_utc: '03:08 UTC', wave_height_m: 4.5, status: 'Severe Urban Flooding' },
+      { id: 'station_cuddalore', name: 'Cuddalore', region: 'Tamil Nadu, India', lat: 11.748, lon: 79.771, dist_km: 2080, arrival_hours: 2.20, arrival_utc: '03:11 UTC', wave_height_m: 5.2, status: 'Major Coastal Destruction' },
+      { id: 'station_nagapattinam', name: 'Nagapattinam', region: 'Tamil Nadu, India', lat: 10.767, lon: 79.843, dist_km: 2050, arrival_hours: 2.25, arrival_utc: '03:14 UTC', wave_height_m: 6.8, status: 'Catastrophic Mainland Strike' },
+      { id: 'station_visakhapatnam', name: 'Visakhapatnam', region: 'Andhra Pradesh, India', lat: 17.686, lon: 83.218, dist_km: 2150, arrival_hours: 2.35, arrival_utc: '03:20 UTC', wave_height_m: 2.4, status: 'Harbor Surge' },
+      { id: 'station_kanyakumari', name: 'Kanyakumari', region: 'Tamil Nadu, India', lat: 8.088, lon: 77.538, dist_km: 2180, arrival_hours: 2.45, arrival_utc: '03:26 UTC', wave_height_m: 5.5, status: 'Cape Surge & Flooding' },
+      { id: 'station_paradip', name: 'Paradip', region: 'Odisha, India', lat: 20.316, lon: 86.611, dist_km: 2220, arrival_hours: 2.65, arrival_utc: '03:38 UTC', wave_height_m: 1.8, status: 'Port Resonance' },
+      { id: 'station_male', name: 'Male', region: 'Maldives Atolls', lat: 4.175, lon: 73.509, dist_km: 2520, arrival_hours: 3.25, arrival_utc: '04:14 UTC', wave_height_m: 3.5, status: 'Atoll Overwash' },
+      { id: 'station_diego_garcia', name: 'Diego Garcia', region: 'BIOT, Central IO', lat: -7.319, lon: 72.422, dist_km: 2850, arrival_hours: 3.75, arrival_utc: '04:44 UTC', wave_height_m: 1.8, status: 'Lagoon Surge' },
+      { id: 'station_seychelles', name: 'Port Victoria', region: 'Mahe, Seychelles', lat: -4.619, lon: 55.451, dist_km: 4450, arrival_hours: 7.10, arrival_utc: '08:05 UTC', wave_height_m: 1.9, status: 'Bridge & Pier Damage' },
+      { id: 'station_mauritius', name: 'Port Louis', region: 'Mauritius', lat: -20.160, lon: 57.501, dist_km: 5050, arrival_hours: 7.20, arrival_utc: '08:11 UTC', wave_height_m: 1.4, status: 'Harbor Surge' },
+      { id: 'station_hafun', name: 'Hafun', region: 'Puntland, Somalia', lat: 10.424, lon: 51.265, dist_km: 4900, arrival_hours: 7.75, arrival_utc: '08:44 UTC', wave_height_m: 4.5, status: 'Severe Trans-Oceanic Inundation' },
+      { id: 'station_mogadishu', name: 'Mogadishu', region: 'Somalia, East Africa', lat: 2.046, lon: 45.318, dist_km: 5600, arrival_hours: 8.10, arrival_utc: '09:05 UTC', wave_height_m: 2.8, status: 'Coastal Inundation' },
+      { id: 'station_mombasa', name: 'Mombasa', region: 'Kenya', lat: -4.043, lon: 39.668, dist_km: 6250, arrival_hours: 8.65, arrival_utc: '09:38 UTC', wave_height_m: 2.1, status: 'Harbor Drawdown & Surge' },
+      { id: 'station_durban', name: 'Durban', region: 'South Africa', lat: -29.858, lon: 31.021, dist_km: 7200, arrival_hours: 11.35, arrival_utc: '12:20 UTC', wave_height_m: 1.5, status: 'Harbor Piers Surge' },
+    ],
+    satellite_pass: {
+      mission: 'Jason-1 Altimeter',
+      pass_id: 'Cycle 109 Pass 129',
+      flyover_label: '+1h 55m post-quake (02:55 UTC)',
+      crest_cm: 60.5,
+      trough_cm: -42.1,
+      lat_start: -10.0,
+      lat_end: 15.0,
+      lon: 84.5,
+    },
+    milestones: [
+      { hour: 0.35, label: '+20m: Sumatra Strike (31m)', desc: 'Devastating 30m runup inundates Banda Aceh & Lhoknga' },
+      { hour: 0.65, label: '+40m: Andaman Strike (5.8m)', desc: 'Port Blair harbor surge and Nicobar island submergence' },
+      { hour: 1.95, label: '+1h 55m: Jason-1 Overpass', desc: 'Satellite altimeter captures +60.5cm open-ocean wave crest' },
+      { hour: 2.05, label: '+2h 05m: Sri Lanka / Galle (8.5m)', desc: 'Catastrophic wave strikes eastern and southern Sri Lanka' },
+      { hour: 2.15, label: '+2h 15m: Chennai / TN Coast (4.5m)', desc: 'Mainland India hit; Marina Beach & Nagapattinam flooded' },
+      { hour: 3.25, label: '+3h 15m: Maldives Overwash (3.5m)', desc: 'Low-lying coral atolls completely inundated' },
+      { hour: 7.75, label: '+7h 45m: East Africa Strike (4.5m)', desc: 'Trans-oceanic wave strikes Hafun, Somalia across 4,900 km' },
+    ],
+  },
+  {
+    id: '1945_makran',
+    title: '1945 Makran Tsunami (Arabian Sea)',
+    shortName: '1945 Makran (Mw 8.1)',
+    year: 1945,
+    origin_time: '1945-11-27T21:56:00Z',
+    origin_time_label: '27 Nov 1945 · 21:56:00 UTC (03:26 IST Nov 28)',
+    magnitude: 8.1,
+    depth_km: 25.0,
+    mechanism: 'Makran Subduction Zone Thrust + Submarine Landslides in the Northern Arabian Sea',
+    epicenter: {
+      latitude: 25.150,
+      longitude: 63.480,
+      location_name: 'Makran Subduction Zone, Off Pasni / Gwadar, Arabian Sea',
+    },
+    rupture_length_km: 220,
+    rupture_duration_sec: 140,
+    rupture_arc: [
+      { lat: 24.90, lon: 61.80, name: 'Chah Bahar Trench' },
+      { lat: 25.05, lon: 62.50, name: 'Gwadar Offshore Margin' },
+      { lat: 25.15, lon: 63.48, name: 'Epicenter (Off Pasni)' },
+      { lat: 25.20, lon: 64.60, name: 'Ormara Offshore Shelf' },
+      { lat: 25.10, lon: 65.80, name: 'Eastern Makran Trench Margin' },
+    ],
+    open_ocean_speed_kmh: 680,
+    max_runup_m: 12.0,
+    total_fatalities: '>4,000 casualties across Pakistan, India, Iran, and Oman',
+    description: 'The most destructive tsunami recorded in the Arabian Sea. Severe thrust subduction off Pasni, compounded by submarine sediment slides, generated catastrophic 10-12m surges along the Makran coast, striking Karachi, Gulf of Kutch, Dwarka, and Mumbai’s Apollo Bunder.',
+    incois_significance: 'Makran is the primary tsunami threat source for India’s west coast (Gujarat, Maharashtra, Goa, Karnataka, Kerala). INCOIS continuously monitors Makran seismicity with pre-computed hydrodynamic models and automated coastal warning sirens.',
+    isochrones: [
+      { hour: 1.0, radius_km: 680, label: '1h: Makran Coast, Karachi Approach' },
+      { hour: 2.0, radius_km: 1360, label: '2h: Gulf of Kutch / Okha, Muscat' },
+      { hour: 3.0, radius_km: 2040, label: '3h: Mumbai (Bombay) Coastal Waters' },
+      { hour: 4.5, radius_km: 3060, label: '4.5h: Central Arabian Sea Basin' },
+      { hour: 6.0, radius_km: 4080, label: '6h: Southern Indian Peninsula (Kerala)' },
+    ],
+    coastal_stations: [
+      { id: 'station_pasni', name: 'Pasni', region: 'Balochistan Coast', lat: 25.263, lon: 63.479, dist_km: 25, arrival_hours: 0.20, arrival_utc: '22:08 UTC', wave_height_m: 12.0, status: 'Catastrophic wave swept town away; massive devastation' },
+      { id: 'station_ormara', name: 'Ormara', region: 'Makran Coast', lat: 25.205, lon: 64.636, dist_km: 115, arrival_hours: 0.35, arrival_utc: '22:17 UTC', wave_height_m: 10.5, status: 'Submarine landslide amplified coastal surge' },
+      { id: 'station_gwadar', name: 'Gwadar', region: 'Balochistan Coast', lat: 25.122, lon: 62.325, dist_km: 120, arrival_hours: 0.40, arrival_utc: '22:20 UTC', wave_height_m: 11.2, status: 'Severe harbor surge & offshore mud volcano emergence' },
+      { id: 'station_karachi', name: 'Karachi (Manora)', region: 'Sindh, Pakistan', lat: 24.799, lon: 66.974, dist_km: 355, arrival_hours: 1.75, arrival_utc: '23:41 UTC', wave_height_m: 2.8, status: 'Harbor docks flooded; naval vessels broken from moorings' },
+      { id: 'station_muscat', name: 'Muscat (Muttrah)', region: 'Gulf of Oman', lat: 23.614, lon: 58.592, dist_km: 520, arrival_hours: 2.10, arrival_utc: '00:02 UTC', wave_height_m: 2.5, status: 'Cliffs & harbor waterfront inundated' },
+      { id: 'station_okha', name: 'Okha / Dwarka', region: 'Gujarat, India', lat: 22.470, lon: 69.070, dist_km: 640, arrival_hours: 2.35, arrival_utc: '00:17 UTC', wave_height_m: 3.2, status: 'Gulf of Kutch surge; coastal settlements destroyed' },
+      { id: 'station_salalah', name: 'Salalah', region: 'Dhofar, Oman', lat: 17.015, lon: 54.092, dist_km: 1320, arrival_hours: 3.40, arrival_utc: '01:20 UTC', wave_height_m: 1.6, status: 'Southern Arabian Sea coastal surge' },
+      { id: 'station_mumbai', name: 'Mumbai (Apollo Bunder)', region: 'Maharashtra, India', lat: 18.922, lon: 72.835, dist_km: 1120, arrival_hours: 3.60, arrival_utc: '01:32 UTC', wave_height_m: 2.0, status: 'Recorded at Gateway of India tide gauge; 15 deaths at Versova' },
+      { id: 'station_karwar', name: 'Karwar', region: 'Karnataka, India', lat: 14.814, lon: 74.130, dist_km: 1580, arrival_hours: 4.80, arrival_utc: '02:44 UTC', wave_height_m: 1.4, status: 'Tide gauge registered distinct sea level anomaly' },
+      { id: 'station_cochin', name: 'Cochin', region: 'Kerala, India', lat: 9.966, lon: 76.267, dist_km: 2150, arrival_hours: 6.10, arrival_utc: '04:02 UTC', wave_height_m: 0.8, status: 'Recorded on Cochin Port authority tide gauge' },
+    ],
+    milestones: [
+      { hour: 0.20, label: '+12m: Pasni Catastrophe (12.0m)', desc: 'Initial massive surge obliterates Pasni within 12 minutes' },
+      { hour: 0.40, label: '+24m: Gwadar & Ormara Strike (11.2m)', desc: 'Makran coast slammed; mud volcano erupts off Malan' },
+      { hour: 1.75, label: '+1h 45m: Karachi Manora Surge (2.8m)', desc: 'Harbor quays flooded and naval shipping disrupted' },
+      { hour: 2.35, label: '+2h 20m: Gujarat / Okha Strike (3.2m)', desc: 'Wave enters Gulf of Kutch, flooding Dwarka coast' },
+      { hour: 3.60, label: '+3h 36m: Mumbai Apollo Bunder (2.0m)', desc: 'Colaba & Apollo Bunder tide gauge registers 2m wave' },
+      { hour: 6.10, label: '+6h 06m: Kerala Coast Arrival (0.8m)', desc: 'Wave dampens as it rounds the southern tip of India' },
+    ],
+  },
+  {
+    id: '2012_wharton',
+    title: '2012 Wharton Basin Intraplate Earthquake (Mw 8.6)',
+    shortName: '2012 Wharton (Mw 8.6)',
+    year: 2012,
+    origin_time: '2012-04-11T08:38:37Z',
+    origin_time_label: '11 Apr 2012 · 08:38:37 UTC (14:08 IST)',
+    magnitude: 8.6,
+    depth_km: 22.9,
+    mechanism: 'Intraplate Strike-Slip Mega-Earthquake (Left-lateral horizontal faulting on orthogonal conjugate faults)',
+    epicenter: {
+      latitude: 2.311,
+      longitude: 93.063,
+      location_name: 'Wharton Basin, Indo-Australian Diffuse Plate Boundary',
+    },
+    rupture_length_km: 400,
+    rupture_duration_sec: 160,
+    rupture_arc: [
+      { lat: 0.80, lon: 92.20, name: 'Southwest Conjugate Fault' },
+      { lat: 2.311, lon: 93.063, name: 'Epicenter (Mw 8.6 Strike-Slip)' },
+      { lat: 3.90, lon: 94.10, name: 'Central Fracture Zone' },
+      { lat: 5.20, lon: 94.80, name: 'Northern Fault Branch' },
+    ],
+    open_ocean_speed_kmh: 730,
+    max_runup_m: 1.05,
+    total_fatalities: '10 (cardiac stress during evacuations; zero direct tsunami casualties)',
+    description: 'The largest strike-slip earthquake ever recorded in human history. Crucially, because fault motion was overwhelmingly horizontal strike-slip rather than vertical seafloor uplift, it generated only benign trans-oceanic tsunami waves (~1m in Sumatra, ~10cm in Chennai) despite its staggering Mw 8.6 magnitude.',
+    incois_significance: 'Historic operational triumph for INCOIS. The Indian Tsunami Early Warning Centre issued initial alerts within 8 minutes, ran real-time TUNAMI-N2 numerical simulations, and successfully downgraded and cancelled warnings once ocean BPR sensors confirmed negligible vertical water column displacement.',
+    isochrones: [
+      { hour: 1.0, radius_km: 730, label: '1h: North Sumatra, Great Nicobar' },
+      { hour: 2.0, radius_km: 1460, label: '2h: Sri Lanka East Coast' },
+      { hour: 3.0, radius_km: 2190, label: '3h: Tamil Nadu / Chennai Coast' },
+      { hour: 4.0, radius_km: 2920, label: '4h: Central Indian Ocean' },
+    ],
+    coastal_stations: [
+      { id: 'station_wharton_meulaboh', name: 'Meulaboh', region: 'Sumatra, Indonesia', lat: 4.145, lon: 96.128, dist_km: 380, arrival_hours: 0.55, arrival_utc: '09:11 UTC', wave_height_m: 1.05, status: 'Benign wave; residents safely evacuated inland' },
+      { id: 'station_wharton_sabang', name: 'Sabang (Pulau Weh)', region: 'Sumatra, Indonesia', lat: 5.890, lon: 95.310, dist_km: 460, arrival_hours: 0.70, arrival_utc: '09:20 UTC', wave_height_m: 0.35, status: 'Minor tide gauge wave registered' },
+      { id: 'station_wharton_campbell', name: 'Campbell Bay', region: 'Great Nicobar, India', lat: 7.000, lon: 93.920, dist_km: 530, arrival_hours: 0.80, arrival_utc: '09:26 UTC', wave_height_m: 0.22, status: 'INCOIS Bottom Pressure Recorder (BPR) confirmed small wave' },
+      { id: 'station_wharton_portblair', name: 'Port Blair', region: 'Andaman, India', lat: 11.667, lon: 92.733, dist_km: 1040, arrival_hours: 1.15, arrival_utc: '09:47 UTC', wave_height_m: 0.31, status: 'Small harbor oscillation; INCOIS alert cancelled' },
+      { id: 'station_wharton_trinco', name: 'Trincomalee', region: 'Sri Lanka East', lat: 8.587, lon: 81.215, dist_km: 1450, arrival_hours: 2.10, arrival_utc: '10:44 UTC', wave_height_m: 0.18, status: 'Minimal tide gauge ripple' },
+      { id: 'station_wharton_chennai', name: 'Chennai (Marina)', region: 'Tamil Nadu, India', lat: 13.082, lon: 80.270, dist_km: 1840, arrival_hours: 2.45, arrival_utc: '11:05 UTC', wave_height_m: 0.10, status: 'INCOIS ITEWC warning successfully lifted; no threat' },
+      { id: 'station_wharton_vizag', name: 'Visakhapatnam', region: 'Andhra Pradesh, India', lat: 17.686, lon: 83.218, dist_km: 2020, arrival_hours: 2.70, arrival_utc: '11:20 UTC', wave_height_m: 0.08, status: 'Tide gauge verified calm conditions' },
+      { id: 'station_wharton_male', name: 'Male', region: 'Maldives Atolls', lat: 4.175, lon: 73.509, dist_km: 2190, arrival_hours: 3.20, arrival_utc: '11:50 UTC', wave_height_m: 0.09, status: 'Calm water; no damage' },
+    ],
+    milestones: [
+      { hour: 0.13, label: '+8m: INCOIS ITEWC Alert Issued', desc: 'Automatic seismic alert dispatched to disaster authorities' },
+      { hour: 0.55, label: '+33m: Sumatra Arrival (1.05m)', desc: 'Meulaboh tide gauge records minor non-destructive 1m wave' },
+      { hour: 0.80, label: '+48m: Campbell Bay BPR (+22cm)', desc: 'Deep-ocean BPR confirms negligible vertical water column displacement' },
+      { hour: 1.15, label: '+1h 09m: Port Blair (+31cm)', desc: 'Andaman gauge confirms strike-slip non-threat profile' },
+      { hour: 2.45, label: '+2h 27m: Chennai Arrival (10cm)', desc: 'INCOIS completely revokes all coastal alerts safely' },
+    ],
+  },
+  {
+    id: '1883_krakatoa',
+    title: '1883 Krakatoa Volcanic Megatsunami',
+    shortName: '1883 Krakatoa (VEI 6)',
+    year: 1883,
+    origin_time: '1883-08-27T03:02:00Z',
+    origin_time_label: '27 Aug 1883 · 03:02:00 UTC (08:32 IST)',
+    magnitude: 6.0,
+    depth_km: 0.1,
+    mechanism: 'Submarine Volcanic Caldera Collapse + Pyroclastic Density Currents in the Sunda Strait',
+    epicenter: {
+      latitude: -6.102,
+      longitude: 105.423,
+      location_name: 'Krakatoa Volcano Caldera, Sunda Strait',
+    },
+    rupture_length_km: 45,
+    rupture_duration_sec: 120,
+    rupture_arc: [
+      { lat: -6.05, lon: 105.35, name: 'Perboewatan Crater' },
+      { lat: -6.102, lon: 105.423, name: 'Krakatoa Caldera Collapse' },
+      { lat: -6.15, lon: 105.48, name: 'Danon Crater' },
+    ],
+    open_ocean_speed_kmh: 720,
+    max_runup_m: 42.0,
+    total_fatalities: '>36,417 along Java and Sumatra coastlines',
+    description: 'One of the most catastrophic volcanic events in history. The catastrophic collapse of Krakatoa’s caldera into the Sunda Strait unleashed terrifying 35-42m tsunami walls that obliterated entire coastal towns in Java and Sumatra, radiating atmospheric and ocean waves globally across the Indian Ocean.',
+    incois_significance: 'Exemplifies non-seismic tsunami risks (volcanic collapse and caldera displacement) that modern warning systems like INCOIS incorporate into comprehensive coastal multi-hazard protocols.',
+    isochrones: [
+      { hour: 1.0, radius_km: 720, label: '1h: Sunda Strait, Java Sea' },
+      { hour: 2.0, radius_km: 1440, label: '2h: Sumatra West Shelf' },
+      { hour: 3.25, radius_km: 2340, label: '3.25h: Andaman Sea (Port Blair)' },
+      { hour: 5.0, radius_km: 3600, label: '5h: Bay of Bengal & Sri Lanka' },
+      { hour: 8.0, radius_km: 5760, label: '8h: Western Indian Ocean (Mauritius)' },
+      { hour: 11.8, radius_km: 8500, label: '11.8h: South Africa' },
+    ],
+    coastal_stations: [
+      { id: 'station_krak_anjer', name: 'Anjer', region: 'Java, Indonesia', lat: -6.050, lon: 105.920, dist_km: 55, arrival_hours: 0.50, arrival_utc: '03:32 UTC', wave_height_m: 38.0, status: 'Town completely obliterated; 4th order iron lighthouse snapped' },
+      { id: 'station_krak_merak', name: 'Merak', region: 'Java, Indonesia', lat: -5.930, lon: 106.000, dist_km: 70, arrival_hours: 0.65, arrival_utc: '03:41 UTC', wave_height_m: 42.0, status: 'Immense 42m wave swept coastal hilltops' },
+      { id: 'station_krak_teluk', name: 'Teluk Betung', region: 'Sumatra, Indonesia', lat: -5.450, lon: 105.270, dist_km: 80, arrival_hours: 0.75, arrival_utc: '03:47 UTC', wave_height_m: 30.0, status: 'Dutch gunboat Berouw swept 3.3 km inland into the hills' },
+      { id: 'station_krak_batavia', name: 'Batavia (Jakarta)', region: 'Java, Indonesia', lat: -6.120, lon: 106.830, dist_km: 160, arrival_hours: 2.20, arrival_utc: '05:14 UTC', wave_height_m: 2.4, status: 'Port canals overflowed and damaged warehouses' },
+      { id: 'station_krak_portblair', name: 'Port Blair', region: 'Andaman, India', lat: 11.667, lon: 92.733, dist_km: 2420, arrival_hours: 3.25, arrival_utc: '06:17 UTC', wave_height_m: 2.1, status: 'Clear oscillation on self-registering tide gauge' },
+      { id: 'station_krak_galle', name: 'Galle', region: 'Southern Sri Lanka', lat: 6.053, lon: 80.221, dist_km: 3100, arrival_hours: 4.40, arrival_utc: '07:26 UTC', wave_height_m: 1.8, status: 'Harbor recessions and surges observed' },
+      { id: 'station_krak_chennai', name: 'Madras (Chennai)', region: 'Tamil Nadu, India', lat: 13.082, lon: 80.270, dist_km: 3350, arrival_hours: 5.10, arrival_utc: '08:08 UTC', wave_height_m: 1.0, status: 'Harbor tide gauge recorded distinct 1.0m fluctuation' },
+      { id: 'station_krak_mauritius', name: 'Port Louis', region: 'Mauritius', lat: -20.160, lon: 57.501, dist_km: 5350, arrival_hours: 7.60, arrival_utc: '10:38 UTC', wave_height_m: 1.5, status: 'Harbor boats torn from moorings' },
+      { id: 'station_krak_sa', name: 'Port Elizabeth', region: 'South Africa', lat: -33.960, lon: 25.600, dist_km: 8100, arrival_hours: 11.80, arrival_utc: '14:50 UTC', wave_height_m: 1.1, status: 'Tidal gauge perturbations registered globally' },
+    ],
+    milestones: [
+      { hour: 0.50, label: '+30m: Anjer Obliterated (38m)', desc: '38-meter wave destroys coastal cities along Sunda Strait' },
+      { hour: 0.65, label: '+39m: Merak Peak Runup (42m)', desc: 'Highest wave runup sweeps hills and lighthouse' },
+      { hour: 3.25, label: '+3h 15m: Port Blair Arrival (2.1m)', desc: 'Andaman self-recording tide gauge registers surge' },
+      { hour: 4.40, label: '+4h 24m: Sri Lanka / Galle (1.8m)', desc: 'Receding harbor waters follow by sea surge' },
+      { hour: 5.10, label: '+5h 06m: Chennai / Madras (1.0m)', desc: 'Mainland India harbor instruments record wave' },
+      { hour: 7.60, label: '+7h 36m: Mauritius (1.5m)', desc: 'Trans-oceanic surge sweeps Port Louis harbor' },
+    ],
+  },
+]
+
+// Backwards-compatible alias for 2004 Sumatra scenario
+export const TSUNAMI_HISTORIC_DATA = TSUNAMI_SCENARIOS[0]
+
+export function getTsunamiScenarioById(id: string): TsunamiScenario {
+  return TSUNAMI_SCENARIOS.find((s) => s.id === id) || TSUNAMI_SCENARIOS[0]
+}
+
