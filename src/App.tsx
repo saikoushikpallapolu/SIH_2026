@@ -1,142 +1,497 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowDown, ArrowUp, ChevronLeft, ChevronRight, CircleGauge, Compass, Crosshair, Droplets, Gamepad2, Layers3, MapPinned, Maximize2, Pause, Play, SlidersHorizontal, ThermometerSun, Waves } from 'lucide-react'
+import {
+  Activity,
+  Compass,
+  Crosshair,
+  Droplets,
+  Eye,
+  EyeOff,
+  Globe2,
+  Layers3,
+  MapPin,
+  Maximize2,
+  Navigation,
+  Pause,
+  Play,
+  RotateCcw,
+  SlidersHorizontal,
+  Thermometer,
+  Waves,
+  Wind,
+  X,
+} from 'lucide-react'
 import GlobeScene from './GlobeScene'
 import ImmersiveOcean from './ImmersiveOcean'
-import { instruments, mockValue, timeSteps, variableMeta } from './mockOceanData'
+import { instruments } from './mockOceanData'
+import {
+  DEPTH_STOPS,
+  querySubgridTelemetry,
+  SCIENTIFIC_PALETTES,
+  type SubgridTelemetry,
+} from './oceanDataEngine'
 import type { Instrument, OceanVariable, Selection, ViewMode } from './types'
 
-const depthStops = [0, 25, 75, 150, 300, 500, 750, 1000, 1500, 2000, 3000, 5000]
-
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).format(new Date(value)).replace(',', ' ·') + ' UTC'
+// Converts month index 0..299 into readable year/month
+function formatEpoch(monthIndex: number): string {
+  const year = 2000 + Math.floor(monthIndex / 12)
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const month = monthNames[monthIndex % 12]
+  let tag = ''
+  if (monthIndex === 59) tag = ' · 2004 Tsunami'
+  else if (monthIndex === 292) tag = ' · Heatwave'
+  else if (monthIndex === 294) tag = ' · Monsoon Peak'
+  return `${month} ${year}${tag}`
 }
 
 export default function App() {
   const [variable, setVariable] = useState<OceanVariable>('temperature')
   const [mode, setMode] = useState<ViewMode>('explore')
-  const [depth, setDepth] = useState(25)
-  const [timeIndex, setTimeIndex] = useState(4)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(instruments[2])
-  const [selection, setSelection] = useState<Selection>({ latitude: 13.4, longitude: 73.7 })
-  const [profileOpen, setProfileOpen] = useState(false)
-  const [fieldScale, setFieldScale] = useState<[number, number]>(variableMeta.temperature.scale)
-  const [overlayStrength, setOverlayStrength] = useState(.77)
-  const [transectStart, setTransectStart] = useState<Selection | null>({ latitude: 15, longitude: 62 })
-  const [transectEnd, setTransectEnd] = useState<Selection | null>({ latitude: 16, longitude: 89 })
-  const [editingTransectPoint, setEditingTransectPoint] = useState<'start' | 'end' | null>(null)
+  const [depth, setDepth] = useState<number>(25)
+  const [monthIndex, setMonthIndex] = useState<number>(292) // May 2024 pre-monsoon heatwave baseline
+  const [isPlaying, setIsPlaying] = useState<boolean>(false)
+  const [selection, setSelection] = useState<Selection>({ latitude: 12.5, longitude: 68.3 })
+  const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
+  const [teleportNonce, setTeleportNonce] = useState<number>(0)
+  const [telemetry, setTelemetry] = useState<SubgridTelemetry | null>(null)
+  const [profileOpen, setProfileOpen] = useState<boolean>(false)
+  const [zenMode, setZenMode] = useState<boolean>(false)
   const [diveTelemetry, setDiveTelemetry] = useState({ depth: 460, temperature: 26.1 })
 
+  // Query live subgrid telemetry on selection, depth, or time change
+  useEffect(() => {
+    let active = true
+    querySubgridTelemetry(selection.latitude, selection.longitude, depth, monthIndex).then((res) => {
+      if (active) setTelemetry(res)
+    })
+    return () => {
+      active = false
+    }
+  }, [selection, depth, monthIndex])
+
+  // Playback timer for 25-year time steps
   useEffect(() => {
     if (!isPlaying) return
-    const timer = window.setInterval(() => setTimeIndex((index) => (index + 1) % timeSteps.length), 1100)
+    const timer = window.setInterval(() => {
+      setMonthIndex((prev) => (prev + 1) % 300)
+    }, 1200)
     return () => window.clearInterval(timer)
   }, [isPlaying])
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowDown') setDepth((value) => depthStops[Math.min(depthStops.findIndex((stop) => stop >= value) + 1, depthStops.length - 1)])
-      if (event.key === 'ArrowUp') setDepth((value) => depthStops[Math.max(depthStops.findIndex((stop) => stop >= value) - 1, 0)])
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  const palette = SCIENTIFIC_PALETTES[variable]
 
-  useEffect(() => setFieldScale(variableMeta[variable].scale), [variable])
+  const handlePointSelect = (coord: Selection) => {
+    setSelection(coord)
+    setSelectedInstrument(null)
+  }
 
-  const locationValue = useMemo(() => mockValue(variable, selection.latitude, selection.longitude, depth, timeIndex), [variable, selection, depth, timeIndex])
-  const activeMeta = variableMeta[variable]
-  const stepDepth = (direction: -1 | 1) => setDepth((value) => {
-    const index = depthStops.findIndex((stop) => stop >= value)
-    return depthStops[Math.max(0, Math.min(depthStops.length - 1, index + direction))]
-  })
+  const handleInstrumentSelect = (inst: Instrument) => {
+    setSelectedInstrument(inst)
+    setSelection({ latitude: inst.latitude, longitude: inst.longitude })
+    setTeleportNonce(Date.now())
+  }
 
-  return <main className="app-shell">
-    <div className="globe-wrap">
-      {mode === 'dive' ? <ImmersiveOcean variable={variable} selection={selection} timeIndex={timeIndex} onTelemetry={(telemetry) => { setDiveTelemetry(telemetry); setDepth(telemetry.depth) }} /> : <GlobeScene variable={variable} depth={depth} timeIndex={timeIndex} mode={mode} overlayStrength={overlayStrength} instruments={instruments} onInstrument={setSelectedInstrument} onSelectPoint={(point) => {
-        setSelection(point); setSelectedInstrument(null)
-        if (editingTransectPoint === 'start') setTransectStart(point)
-        if (editingTransectPoint === 'end') setTransectEnd(point)
-        setEditingTransectPoint(null)
-      }} />}
-    </div>
+  const handleTeleportCamera = () => {
+    setTeleportNonce(Date.now())
+  }
 
-    <header className="topbar glass">
-      <div className="brand"><span className="brand-mark"><Waves size={18} /></span><span>Ocean<span>Scope</span></span><small>INDIA</small></div>
-      <div className="status"><span className="pulse" /> {mode === 'dive' ? 'IMMERSIVE OCEAN SIMULATION' : 'GLOBAL OCEAN EXPLORER'} <i /> Prototype data</div>
-      <button className="icon-button" aria-label="Fullscreen"><Maximize2 size={18} /></button>
-    </header>
+  return (
+    <main className="app-shell">
+      {/* 3D Visual Canvas */}
+      <div className="globe-wrap">
+        {mode === 'dive' ? (
+          <ImmersiveOcean
+            variable={variable}
+            selection={selection}
+            timeIndex={Math.floor(monthIndex / 50)}
+            onTelemetry={(tel) => {
+              setDiveTelemetry(tel)
+              setDepth(tel.depth)
+            }}
+          />
+        ) : (
+          <GlobeScene
+            variable={variable}
+            depth={depth}
+            timeIndex={monthIndex % 12}
+            mode={mode}
+            overlayStrength={0.78}
+            instruments={instruments}
+            selection={selection}
+            teleportNonce={teleportNonce}
+            onInstrument={handleInstrumentSelect}
+            onSelectPoint={handlePointSelect}
+          />
+        )}
+      </div>
 
-    <aside className="left-rail glass">
-      <section>
-        <p className="eyebrow">OCEAN STATE</p>
-        <h1>{mode === 'dive' ? <>Dive the<br /><em>Indian Ocean.</em></> : <>Indian Ocean<br /><em>in motion.</em></>}</h1>
-        <p className="subtle">{mode === 'dive' ? 'Navigate the selected ocean region from the surface to the rough seafloor.' : 'Choose a location on Earth, then enter an explorable underwater world.'}</p>
-      </section>
-      <section className="control-group">
-        <label><SlidersHorizontal size={14} /> VARIABLE</label>
-        <div className="variable-list">
-          {(Object.keys(variableMeta) as OceanVariable[]).map((item) => <button key={item} className={variable === item ? 'active' : ''} onClick={() => setVariable(item)}>
-            {item === 'temperature' ? <ThermometerSun size={16} /> : item === 'salinity' ? <Droplets size={16} /> : item === 'chlorophyll' ? <Activity size={16} /> : <CircleGauge size={16} />}
-            <span>{variableMeta[item].label}</span><i style={{ background: variableMeta[item].colors[1] }} />
-          </button>)}
-        </div>
-      </section>
-      <section className="control-group mode-controls">
-        <label><Layers3 size={14} /> VIEW MODE</label>
-        <div className="segmented two-mode"><button className={mode === 'explore' ? 'selected' : ''} onClick={() => setMode('explore')}>globe</button><button className={mode === 'dive' ? 'selected' : ''} onClick={() => setMode('dive')}>ocean dive</button></div>
-      </section>
-      <section className="legend">
-        <div><span>{activeMeta.label}</span><b>{activeMeta.unit}</b></div>
-        <div className="gradient" style={{ background: `linear-gradient(90deg, ${activeMeta.colors[0]}, ${activeMeta.colors[1]})` }} />
-        <div className="legend-scale"><span>{activeMeta.range.split(' — ')[0]}</span><span>{activeMeta.range.split(' — ')[1]}</span></div>
-      </section>
-    </aside>
+      {/* Minimalist Topbar */}
+      {!zenMode && (
+        <header className="topbar glass">
+          <div className="brand">
+            <span className="brand-mark">
+              <Waves size={16} />
+            </span>
+            <span>
+              Ocean<span>Scope</span>
+            </span>
+            <small>INDIA</small>
+          </div>
 
-    {mode !== 'dive' && <section className="location-card glass">
-      <div className="card-kicker"><MapPinned size={14} /> SELECTED WATER COLUMN</div>
-      <div className="coordinate"><strong>{selection.latitude.toFixed(2)}°{selection.latitude >= 0 ? 'N' : 'S'}</strong><strong>{Math.abs(selection.longitude).toFixed(2)}°{selection.longitude >= 0 ? 'E' : 'W'}</strong></div>
-      <div className="value-row"><span>{activeMeta.label} at {depth} m</span><b>{locationValue.toFixed(variable === 'chlorophyll' ? 2 : 1)} <small>{activeMeta.unit}</small></b></div>
-      <p>Tap the globe to choose an area, then enter Ocean Dive.</p>
-    </section>}
+          <div className="nav-center">
+            <button
+              className={mode === 'explore' ? 'active' : ''}
+              onClick={() => setMode('explore')}
+            >
+              <Globe2 size={14} /> Globe
+            </button>
+            <button
+              className={mode === 'dive' ? 'active' : ''}
+              onClick={() => setMode('dive')}
+            >
+              <Compass size={14} /> Ocean Dive
+            </button>
+          </div>
 
-    {mode === 'explore' && <section className="depth-controller glass">
-      <div><p className="eyebrow">WATER COLUMN</p><strong>{depth.toLocaleString()}<small>m</small></strong></div>
-      <div className="depth-actions"><button onClick={() => stepDepth(-1)} aria-label="Ascend"><ArrowUp size={17} /></button><button onClick={() => stepDepth(1)} aria-label="Descend"><ArrowDown size={17} /></button></div>
-      <input aria-label="Depth" type="range" min="0" max="5000" step="25" value={depth} onChange={(event) => setDepth(Number(event.target.value))} />
-      <div className="depth-labels"><span>SURFACE</span><span>ABYSS</span></div>
-    </section>}
+          <div className="topbar-actions">
+            <div className="status-badge">
+              <span className="pulse" />
+              <span>25-YR ATLAS</span>
+            </div>
+            <button
+              className="icon-btn"
+              onClick={() => setZenMode(true)}
+              title="Zen Mode (Hide UI)"
+              aria-label="Hide UI"
+            >
+              <EyeOff size={15} />
+            </button>
+          </div>
+        </header>
+      )}
 
-    {mode === 'explore' && <section className="instrument-card glass">
-      <div className="card-kicker"><Crosshair size={14} /> {selectedInstrument ? selectedInstrument.kind.toUpperCase() : 'OCEAN POINT'}</div>
-      {selectedInstrument ? <>
-        <div className="instrument-title"><div className={`instrument-dot ${selectedInstrument.kind === 'Glider' ? 'amber' : ''}`} /><div><strong>{selectedInstrument.name}</strong><span>Updated {formatTime(selectedInstrument.timestamp)}</span></div></div>
-        <div className="instrument-metrics"><div><span>TEMP</span><b>{selectedInstrument.temperature.toFixed(1)}°C</b></div><div><span>SAL</span><b>{selectedInstrument.salinity.toFixed(1)}</b></div><div><span>CHL-A</span><b>{selectedInstrument.chlorophyll.toFixed(2)}</b></div></div>
-        {selectedInstrument.kind === 'Glider' && <div className="glider-track"><span>MISSION TRACK</span><div><i /> <i /> <i /> <i /> <b>↗</b></div></div>}
-        <button className="profile-button" onClick={() => setProfileOpen(true)}>Open depth profile <ChevronRight size={15} /></button>
-      </> : <p className="empty-state">Choose an Argo float or Glider marker to compare measured profiles with the model field.</p>}
-    </section>}
-    {mode === 'dive' && <><section className="dive-hud glass"><div className="card-kicker"><Compass size={14} /> {selection.latitude.toFixed(2)}°N · {selection.longitude.toFixed(2)}°E</div><div className="dive-readout"><div><span>DEPTH</span><strong>{diveTelemetry.depth}<small>m</small></strong></div><div><span>WATER TEMP</span><strong>{diveTelemetry.temperature.toFixed(1)}<small>°C</small></strong></div></div><div className="depth-rail"><i style={{ height: `${Math.min(100, diveTelemetry.depth / 20)}%` }} /></div><button onClick={() => setMode('explore')} className="return-globe">Return to globe</button></section><div className="dive-guide glass"><Gamepad2 size={15} /><span><b>Click water</b> to look around · <b>W A S D</b> to swim · <b>↑ ↓</b> to change depth · <b>Shift</b> to accelerate</span></div></>}
+      {/* Zen Mode Unhide Button */}
+      {zenMode && (
+        <button
+          className="icon-btn glass"
+          style={{ position: 'absolute', top: 20, right: 20, zIndex: 50 }}
+          onClick={() => setZenMode(false)}
+          title="Show UI"
+        >
+          <Eye size={16} />
+        </button>
+      )}
 
-    {mode !== 'dive' && <footer className="timeline glass">
-      <button className="play-button" onClick={() => setIsPlaying((playing) => !playing)} aria-label={isPlaying ? 'Pause time animation' : 'Play time animation'}>{isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>
-      <div className="time-control"><div className="time-label"><span>{formatTime(timeSteps[timeIndex])}</span><b>3-day model cycle</b></div><input aria-label="Time" type="range" min="0" max={timeSteps.length - 1} step="1" value={timeIndex} onChange={(event) => setTimeIndex(Number(event.target.value))} /><div className="ticks">{timeSteps.map((step, index) => <button key={step} className={index === timeIndex ? 'current' : ''} onClick={() => setTimeIndex(index)}><i />{index % 2 === 0 && <span>{new Date(step).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}</button>)}</div></div>
-      <button className="timeline-arrow" onClick={() => setTimeIndex((value) => Math.max(value - 1, 0))}><ChevronLeft size={18} /></button>
-      <button className="timeline-arrow" onClick={() => setTimeIndex((value) => Math.min(value + 1, timeSteps.length - 1))}><ChevronRight size={18} /></button>
-    </footer>}
-    {profileOpen && selectedInstrument && <ProfilePanel instrument={selectedInstrument} onClose={() => setProfileOpen(false)} />}
-  </main>
+      {/* Minimalist Floating Sub-Grid Telemetry Card */}
+      {!zenMode && mode === 'explore' && telemetry && (
+        <section className="subgrid-card glass">
+          <div className="basin-badge">
+            <MapPin size={13} />
+            <span>{telemetry.basin}</span>
+          </div>
+
+          <div className="subgrid-coords">
+            <span>
+              {Math.abs(telemetry.coordinate.latitude).toFixed(4)}°
+              {telemetry.coordinate.latitude >= 0 ? 'N' : 'S'}
+            </span>
+            <span>
+              {Math.abs(telemetry.coordinate.longitude).toFixed(4)}°
+              {telemetry.coordinate.longitude >= 0 ? 'E' : 'W'}
+            </span>
+          </div>
+
+          <div className="subgrid-metrics">
+            <div className="metric-box">
+              <span>WATER TEMP</span>
+              <strong>
+                {telemetry.temperature_c.toFixed(1)}
+                <small>°C</small>
+              </strong>
+            </div>
+            <div className="metric-box">
+              <span>SALINITY</span>
+              <strong>
+                {telemetry.salinity_psu.toFixed(1)}
+                <small>PSU</small>
+              </strong>
+            </div>
+            <div className="metric-box">
+              <span>SEABED DEPTH</span>
+              <strong>
+                {Math.round(telemetry.seabed_depth_m).toLocaleString()}
+                <small>m</small>
+              </strong>
+            </div>
+            <div className="metric-box">
+              <span>CURRENT SPEED</span>
+              <strong>
+                {telemetry.current_speed_m_s.toFixed(2)}
+                <small>m/s</small>
+              </strong>
+            </div>
+          </div>
+
+          <div className="subgrid-actions">
+            <button
+              className="teleport-btn"
+              onClick={handleTeleportCamera}
+              title="Smoothly swoop camera to this coordinate"
+            >
+              <Crosshair size={13} /> Teleport
+            </button>
+            <button
+              className="dive-action-btn"
+              onClick={() => setMode('dive')}
+              title="Dive underwater at this exact coordinate"
+            >
+              <Navigation size={13} /> Dive In
+            </button>
+            <button
+              className="dive-action-btn"
+              onClick={() => setProfileOpen(true)}
+              title="View full CTD depth profile"
+            >
+              <Activity size={13} /> Profile
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Dive HUD (Minimalist) */}
+      {!zenMode && mode === 'dive' && (
+        <>
+          <section className="dive-hud-clean glass">
+            <div className="dive-title">
+              <Compass size={13} />
+              <span>
+                {Math.abs(selection.latitude).toFixed(2)}°N · {Math.abs(selection.longitude).toFixed(2)}°E
+              </span>
+            </div>
+            <div className="dive-depth-big">
+              {diveTelemetry.depth}
+              <small>m</small>
+            </div>
+            <div style={{ fontSize: 12, color: '#8ec9db', fontFamily: 'DM Mono' }}>
+              Water: <b>{diveTelemetry.temperature.toFixed(1)}°C</b>
+            </div>
+          </section>
+
+          <div className="dive-controls-hint glass">
+            <Compass size={13} />
+            <span>
+              Use <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to swim · <kbd>↑</kbd> <kbd>↓</kbd> for depth · Click & drag water to look
+            </span>
+          </div>
+        </>
+      )}
+
+      {/* Minimalist Floating Bottom Dock */}
+      {!zenMode && mode === 'explore' && (
+        <footer className="bottom-dock glass">
+          <div className="dock-top-row">
+            {/* Variable Pills */}
+            <div className="variable-pills">
+              <button
+                className={`var-pill ${variable === 'temperature' ? 'active' : ''}`}
+                onClick={() => setVariable('temperature')}
+              >
+                <Thermometer size={13} />
+                <span>Temp</span>
+                <i style={{ color: '#ff6b4a' }} />
+              </button>
+              <button
+                className={`var-pill ${variable === 'salinity' ? 'active' : ''}`}
+                onClick={() => setVariable('salinity')}
+              >
+                <Droplets size={13} />
+                <span>Salinity</span>
+                <i style={{ color: '#5ce5d5' }} />
+              </button>
+              <button
+                className={`var-pill ${variable === 'chlorophyll' ? 'active' : ''}`}
+                onClick={() => setVariable('chlorophyll')}
+              >
+                <Activity size={13} />
+                <span>Chlorophyll</span>
+                <i style={{ color: '#7cd362' }} />
+              </button>
+              <button
+                className={`var-pill ${variable === 'currents' ? 'active' : ''}`}
+                onClick={() => setVariable('currents')}
+              >
+                <Wind size={13} />
+                <span>Currents</span>
+                <i style={{ color: '#00f2fe' }} />
+              </button>
+            </div>
+
+            {/* Depth Selector */}
+            <div className="depth-selector">
+              <SlidersHorizontal size={13} color="#70e2ff" />
+              <span>{depth === 0 ? 'Surface' : `${depth.toLocaleString()} m`}</span>
+              <input
+                type="range"
+                min="0"
+                max="5000"
+                step="25"
+                value={depth}
+                onChange={(e) => setDepth(Number(e.target.value))}
+                title="Select depth layer"
+              />
+            </div>
+          </div>
+
+          <div className="dock-bottom-row">
+            {/* Play/Pause */}
+            <button
+              className="play-toggle"
+              onClick={() => setIsPlaying((p) => !p)}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+            >
+              {isPlaying ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
+            </button>
+
+            {/* Timeline Scrubber */}
+            <div className="timeline-slider-wrap">
+              <span className="epoch-badge">{formatEpoch(monthIndex)}</span>
+              <input
+                type="range"
+                min="0"
+                max="299"
+                value={monthIndex}
+                onChange={(e) => setMonthIndex(Number(e.target.value))}
+                title="Scrub across 25 years (2000 - 2024)"
+              />
+            </div>
+
+            {/* Colorbar */}
+            <div className="colorbar-wrap">
+              <span>{palette.range[0]}</span>
+              <div
+                className="colorbar-bar"
+                style={{
+                  background: `linear-gradient(90deg, ${palette.stops.join(', ')})`,
+                }}
+              />
+              <span>
+                {palette.range[1]} {palette.unit}
+              </span>
+            </div>
+          </div>
+        </footer>
+      )}
+
+      {/* Collapsible Depth Profile Drawer / Modal */}
+      {profileOpen && telemetry && (
+        <aside className="profile-drawer glass" aria-label="Depth Profile Curve">
+          <div className="profile-header">
+            <div>
+              <h3>Water Column Profile</h3>
+              <span>
+                {telemetry.basin} · {Math.abs(telemetry.coordinate.latitude).toFixed(2)}°N,{' '}
+                {Math.abs(telemetry.coordinate.longitude).toFixed(2)}°E
+              </span>
+            </div>
+            <button className="icon-btn" onClick={() => setProfileOpen(false)} aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
+
+          <DepthProfileChart telemetry={telemetry} currentDepth={depth} />
+
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#7faab8', fontFamily: 'DM Mono' }}>
+            <span>Seabed: <b>{Math.round(telemetry.seabed_depth_m).toLocaleString()} m</b></span>
+            <span>Source: <b>25-Yr 4D Binary Cube</b></span>
+          </div>
+        </aside>
+      )}
+    </main>
+  )
 }
 
-function ProfilePanel({ instrument, onClose }: { instrument: Instrument; onClose: () => void }) {
-  const temperatures = Array.from({ length: 9 }, (_, index) => instrument.temperature - index * 1.72 + Math.sin(index) * .35)
-  const modelTemperatures = temperatures.map((value, index) => value + .4 - Math.sin(index * 1.45) * .5)
-  const points = temperatures.map((value, index) => `${42 + (value - 8) * 7},${26 + index * 24}`).join(' ')
-  const modelPoints = modelTemperatures.map((value, index) => `${42 + (value - 8) * 7},${26 + index * 24}`).join(' ')
-  return <section className="profile-panel glass" aria-label="Instrument depth profile">
-    <header><div><p className="eyebrow">OBSERVED PROFILE</p><strong>{instrument.name}</strong></div><button onClick={onClose} aria-label="Close profile">×</button></header>
-    <div className="chart-label"><span>Temperature <b>°C</b></span><span>0–2000 m</span></div>
-    <svg viewBox="0 0 220 226" role="img" aria-label="Observed and modelled temperature against depth"><defs><linearGradient id="profile-line" x1="0" x2="1"><stop stopColor="#81efff" /><stop offset="1" stopColor="#ffd268" /></linearGradient></defs>{[26, 74, 122, 170, 218].map((y) => <line key={y} x1="25" x2="206" y1={y} y2={y} className="chart-grid" />)}<polyline points={modelPoints} fill="none" stroke="#8e96bc" strokeWidth="2" strokeDasharray="4 3" strokeLinecap="round" /><polyline points={points} fill="none" stroke="url(#profile-line)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />{temperatures.map((value, index) => <circle key={index} cx={42 + (value - 8) * 7} cy={26 + index * 24} r="3" fill="#d5fbff" />)}<text x="2" y="29">0</text><text x="2" y="125">1000</text><text x="2" y="221">2000m</text></svg>
-    <div className="profile-foot"><span><i /> observation <i className="model-dot" /> model</span><span>QC: <b>good</b></span></div>
-  </section>
+function DepthProfileChart({
+  telemetry,
+  currentDepth,
+}: {
+  telemetry: SubgridTelemetry
+  currentDepth: number
+}) {
+  const temps = telemetry.ctd_profile.temperatures
+  const depths = DEPTH_STOPS.slice(0, temps.length)
+
+  // Map temps (range 2..32) and depths (0..2000m for plot display)
+  const minTemp = 2
+  const maxTemp = 32
+  const maxPlotDepth = 2000
+
+  const width = 340
+  const height = 180
+  const padL = 35
+  const padR = 20
+  const padT = 15
+  const padB = 25
+
+  const points = depths.map((d, i) => {
+    const t = temps[i] ?? 20
+    const clampedD = Math.min(d, maxPlotDepth)
+    const x = padL + ((t - minTemp) / (maxTemp - minTemp)) * (width - padL - padR)
+    const y = padT + (clampedD / maxPlotDepth) * (height - padT - padB)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+
+  const currentY = padT + (Math.min(currentDepth, maxPlotDepth) / maxPlotDepth) * (height - padT - padB)
+
+  return (
+    <svg className="profile-chart-svg" viewBox={`0 0 ${width} ${height}`}>
+      {/* Grid lines */}
+      {[0, 500, 1000, 1500, 2000].map((d) => {
+        const y = padT + (d / maxPlotDepth) * (height - padT - padB)
+        return (
+          <g key={d}>
+            <line x1={padL} x2={width - padR} y1={y} y2={y} className="chart-grid-line" />
+            <text x={padL - 6} y={y + 3} textAnchor="end" fill="#6991a0" fontSize={8}>
+              {d}m
+            </text>
+          </g>
+        )
+      })}
+
+      {/* Temperature ticks at bottom */}
+      {[5, 15, 25].map((tempVal) => {
+        const x = padL + ((tempVal - minTemp) / (maxTemp - minTemp)) * (width - padL - padR)
+        return (
+          <g key={tempVal}>
+            <line x1={x} x2={x} y1={padT} y2={height - padB} className="chart-grid-line" />
+            <text x={x} y={height - 8} textAnchor="middle" fill="#6991a0" fontSize={8}>
+              {tempVal}°C
+            </text>
+          </g>
+        )
+      })}
+
+      {/* Temperature Curve */}
+      <polyline
+        points={points}
+        fill="none"
+        stroke="#00f2fe"
+        strokeWidth={2.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      {/* Depth indicator line */}
+      <line
+        x1={padL}
+        x2={width - padR}
+        y1={currentY}
+        y2={currentY}
+        stroke="#ffd166"
+        strokeWidth={1.5}
+        strokeDasharray="4 2"
+      />
+      <text x={width - padR} y={currentY - 4} textAnchor="end" fill="#ffd166" fontSize={8}>
+        Active Depth: {currentDepth}m
+      </text>
+    </svg>
+  )
 }
