@@ -5,6 +5,8 @@ import * as THREE from 'three'
 import {
   GLOBE_RADIUS,
   getOceanVelocity,
+  isDryLand,
+  isPointInIndianOcean,
   latLngToVector3,
   vector3ToLatLng,
 } from './oceanDataEngine'
@@ -13,24 +15,6 @@ import type { Instrument, OceanVariable, Selection, ViewMode } from './types'
 const RADIUS = GLOBE_RADIUS
 const EARTH_DAY_MAP = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'
 const EARTH_WATER_MASK = 'https://threejs.org/examples/textures/planets/earth_specular_2048.jpg'
-
-// Fast bounding check for dry land in Indian Ocean sector
-function isDryLand(lat: number, lon: number): boolean {
-  // Mainland Indian Subcontinent
-  if (lat > 8.5 && lat < 28 && lon > 74 && lon < 86) {
-    if (lat > 18) return true
-    if (lon > 76 && lon < 82) return true
-  }
-  // East Africa
-  if (lon < 42 && lat > -18 && lat < 12) return true
-  // Arabia
-  if (lat > 14 && lat < 30 && lon > 42 && lon < 56) return true
-  // Australia
-  if (lat < -18 && lat > -36 && lon > 115) return true
-  // Madagascar
-  if (lat > -25 && lat < -12 && lon > 44 && lon < 50) return true
-  return false
-}
 
 interface FlowParticle {
   lat: number
@@ -450,6 +434,7 @@ function Marker({
  * Animated Holographic Sonar Beacon.
  */
 function HolographicBeacon({ selection }: { selection: Selection }) {
+  const isSector = isPointInIndianOcean(selection.latitude, selection.longitude)
   const localPos = useMemo(
     () => latLngToVector3(selection.latitude, selection.longitude, RADIUS + 0.005),
     [selection.latitude, selection.longitude]
@@ -480,23 +465,27 @@ function HolographicBeacon({ selection }: { selection: Selection }) {
     }
   })
 
+  const primaryColor = isSector ? '#00f2fe' : '#f59e0b'
+  const secondaryColor = isSector ? '#4facfe' : '#fbbf24'
+  const beamColor = isSector ? '#70e2ff' : '#fde68a'
+
   return (
     <group position={localPos} quaternion={quaternion}>
       <mesh>
         <circleGeometry args={[0.024, 32]} />
-        <meshBasicMaterial color="#00f2fe" transparent opacity={0.95} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={primaryColor} transparent opacity={0.95} side={THREE.DoubleSide} />
       </mesh>
       <mesh ref={ring1Ref}>
         <ringGeometry args={[0.035, 0.05, 32]} />
-        <meshBasicMaterial color="#4facfe" transparent opacity={0.8} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={secondaryColor} transparent opacity={0.8} side={THREE.DoubleSide} />
       </mesh>
       <mesh ref={ring2Ref}>
         <ringGeometry args={[0.035, 0.05, 32]} />
-        <meshBasicMaterial color="#00f2fe" transparent opacity={0.6} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={primaryColor} transparent opacity={0.6} side={THREE.DoubleSide} />
       </mesh>
       <mesh position={[0, 0, 0.07]}>
         <cylinderGeometry args={[0.0018, 0.0018, 0.14, 8]} />
-        <meshBasicMaterial color="#70e2ff" transparent opacity={0.75} />
+        <meshBasicMaterial color={beamColor} transparent opacity={0.75} />
       </mesh>
       <mesh position={[0, 0, 0.14]}>
         <sphereGeometry args={[0.012, 16, 16]} />

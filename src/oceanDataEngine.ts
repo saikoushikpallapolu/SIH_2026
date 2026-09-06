@@ -11,6 +11,49 @@ import type { OceanVariable } from './types'
 export const GLOBE_RADIUS = 1.55
 export const API_BASE = 'http://127.0.0.1:8000'
 
+export const INDIAN_OCEAN_BOUNDS = {
+  minLon: 20,
+  maxLon: 125,
+  minLat: -45,
+  maxLat: 32,
+}
+
+export function isPointInIndianOcean(lat: number, lon: number): boolean {
+  return (
+    lon >= INDIAN_OCEAN_BOUNDS.minLon &&
+    lon <= INDIAN_OCEAN_BOUNDS.maxLon &&
+    lat >= INDIAN_OCEAN_BOUNDS.minLat &&
+    lat <= INDIAN_OCEAN_BOUNDS.maxLat
+  )
+}
+
+/**
+ * Fast geometric check for continental dry land.
+ */
+export function isDryLand(lat: number, lon: number): boolean {
+  // Mainland Indian Subcontinent
+  if (lat > 8.5 && lat < 33 && lon > 68 && lon < 90) {
+    if (lat > 22) return true
+    if (lat > 15 && lon > 73 && lon < 84) return true
+    if (lat > 8.5 && lon > 75.5 && lon < 80.5) return true
+  }
+  // Africa
+  if (lon < 45 && lat > -35 && lat < 36) {
+    if (lon < 35 || lat > 0 || (lat < -10 && lon < 40)) return true
+  }
+  // Arabian Peninsula
+  if (lat > 13 && lat < 32 && lon > 35 && lon < 60) return true
+  // Australia
+  if (lat < -11 && lat > -39 && lon > 113 && lon < 154) return true
+  // Madagascar
+  if (lat > -26 && lat < -12 && lon > 43 && lon < 51) return true
+  // Southeast Asia / Indochina
+  if (lat > 6 && lat < 28 && lon > 98 && lon < 110) return true
+  // Northern continents / High Eurasia
+  if (lat > 35) return true
+  return false
+}
+
 export const DEPTH_STOPS = [0, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000]
 
 export interface SubgridTelemetry {
@@ -203,13 +246,14 @@ export function getOceanVelocity(
  * Provides continuous worldwide coverage (Pacific, Atlantic, Indian, Polar).
  */
 export function getSubgridLocalEstimate(lat: number, lon: number, depth: number, timeIndex = 0): SubgridTelemetry {
-  const basin = identifyBasin(lat, lon)
+  const isLand = isDryLand(lat, lon)
+  const basin = isLand ? 'Continental Landmass' : identifyBasin(lat, lon)
   const isSouth = lat < 0
   const latFactor = Math.cos(THREE.MathUtils.degToRad(lat * 1.6))
   const lonFactor = Math.sin(THREE.MathUtils.degToRad((lon - 40) * 1.5))
   const seasonalWave = Math.sin(timeIndex * 0.52 + (isSouth ? Math.PI : 0))
 
-  const isInsideIndianOcean = lon >= 20 && lon <= 125 && lat >= -45 && lat <= 32
+  const isInsideIndianOcean = isPointInIndianOcean(lat, lon)
 
   // Global Surface Temperature Baselines
   let surfaceTemp = 28.2 + latFactor * 3.4 + seasonalWave * 1.8 + lonFactor * 0.8
@@ -228,42 +272,48 @@ export function getSubgridLocalEstimate(lat: number, lon: number, depth: number,
   // Depth exponential thermocline
   const thermoclineDepth = 160 + Math.max(0, latFactor) * 80
   const tempRatio = Math.exp(-depth / thermoclineDepth)
-  const currentTemp = Math.max(1.5, Math.round((surfaceTemp * tempRatio + 2.2 * (1 - tempRatio)) * 100) / 100)
-  const currentSal = Math.round((surfaceSal + (1 - tempRatio) * 0.4) * 100) / 100
+  const currentTemp = isLand ? 32.0 : Math.max(1.5, Math.round((surfaceTemp * tempRatio + 2.2 * (1 - tempRatio)) * 100) / 100)
+  const currentSal = isLand ? 0.0 : Math.round((surfaceSal + (1 - tempRatio) * 0.4) * 100) / 100
 
   // 16 depth stops
   const temps = DEPTH_STOPS.map((d) => {
+    if (isLand) return 32.0
     const r = Math.exp(-d / thermoclineDepth)
     return Math.round((surfaceTemp * r + 2.2 * (1 - r)) * 100) / 100
   })
   const sals = DEPTH_STOPS.map((d) => {
+    if (isLand) return 0.0
     const r = Math.exp(-d / thermoclineDepth)
     return Math.round((surfaceSal + (1 - r) * 0.4) * 100) / 100
   })
 
   // Seabed estimate
-  let seabed = -4300
-  if (basin.includes('Java')) seabed = -7120
-  if (basin.includes('Ridge')) seabed = -2450
-  if (basin.includes('Persian')) seabed = -95
-  if (basin.includes('Red Sea')) seabed = -1200
-  if (basin.includes('Pacific')) seabed = -4800
+  let seabed = isLand ? 150 : -4300
+  if (!isLand) {
+    if (basin.includes('Java')) seabed = -7120
+    if (basin.includes('Ridge')) seabed = -2450
+    if (basin.includes('Persian')) seabed = -95
+    if (basin.includes('Red Sea')) seabed = -1200
+    if (basin.includes('Pacific')) seabed = -4800
+  }
 
-  const vel = getOceanVelocity(lat, lon, timeIndex)
+  const vel = isLand ? { speed: 0, u: 0, v: 0 } : getOceanVelocity(lat, lon, timeIndex)
 
-  let chl = 0.14
-  if (basin.includes('Somali') || (basin.includes('Arabian') && lon < 60)) chl = 1.45
-  else if (basin.includes('Bay of Bengal') && lat > 16) chl = 0.85
-  else if (basin.includes('Humboldt')) chl = 1.25
-  else if (lat < -35) chl = 0.65
-  else chl = Math.max(0.03, 0.12 - Math.abs(lat + 15) * 0.005)
+  let chl = isLand ? 0.0 : 0.14
+  if (!isLand) {
+    if (basin.includes('Somali') || (basin.includes('Arabian') && lon < 60)) chl = 1.45
+    else if (basin.includes('Bay of Bengal') && lat > 16) chl = 0.85
+    else if (basin.includes('Humboldt')) chl = 1.25
+    else if (lat < -35) chl = 0.65
+    else chl = Math.max(0.03, 0.12 - Math.abs(lat + 15) * 0.005)
+  }
 
   return {
     coordinate: { latitude: lat, longitude: lon },
     basin,
-    is_land: false,
+    is_land: isLand,
     elevation_m: seabed,
-    seabed_depth_m: Math.abs(seabed),
+    seabed_depth_m: isLand ? 0 : Math.abs(seabed),
     requested_depth_m: depth,
     temperature_c: currentTemp,
     salinity_psu: currentSal,

@@ -8,6 +8,7 @@ import {
   EyeOff,
   Globe2,
   Layers3,
+  Lock,
   MapPin,
   Maximize2,
   Navigation,
@@ -25,6 +26,7 @@ import ImmersiveOcean from './ImmersiveOcean'
 import { instruments } from './mockOceanData'
 import {
   DEPTH_STOPS,
+  isPointInIndianOcean,
   querySubgridTelemetry,
   SCIENTIFIC_PALETTES,
   type SubgridTelemetry,
@@ -79,6 +81,15 @@ export default function App() {
 
   const palette = SCIENTIFIC_PALETTES[variable]
 
+  const isInsideIndianOcean = isPointInIndianOcean(selection.latitude, selection.longitude)
+  const canDive = isInsideIndianOcean && !telemetry?.is_land
+
+  const handleJumpToIndianOcean = () => {
+    setSelection({ latitude: 12.5, longitude: 68.3 })
+    setSelectedInstrument(null)
+    setTeleportNonce(Date.now())
+  }
+
   const handlePointSelect = (coord: Selection) => {
     setSelection(coord)
     setSelectedInstrument(null)
@@ -101,7 +112,7 @@ export default function App() {
         {mode === 'dive' ? (
           <ImmersiveOcean
             variable={variable}
-            selection={selection}
+            selection={isInsideIndianOcean ? selection : { latitude: 12.5, longitude: 68.3 }}
             timeIndex={Math.floor(monthIndex / 50)}
             onTelemetry={(tel) => {
               setDiveTelemetry(tel)
@@ -146,7 +157,17 @@ export default function App() {
             </button>
             <button
               className={mode === 'dive' ? 'active' : ''}
-              onClick={() => setMode('dive')}
+              onClick={() => {
+                if (!canDive) {
+                  handleJumpToIndianOcean()
+                }
+                setMode('dive')
+              }}
+              title={
+                canDive
+                  ? 'Ocean Dive simulation'
+                  : 'Reposition to Indian Ocean 4D Twin Sector (Arabian Sea) and Dive'
+              }
             >
               <Compass size={14} /> Ocean Dive
             </button>
@@ -187,6 +208,12 @@ export default function App() {
           <div className="basin-badge">
             <MapPin size={13} />
             <span>{telemetry.basin}</span>
+            {!isInsideIndianOcean && (
+              <span className="global-badge">GLOBAL SCAN</span>
+            )}
+            {telemetry.is_land && (
+              <span className="land-badge">LANDMASS</span>
+            )}
           </div>
 
           <div className="subgrid-coords">
@@ -239,13 +266,39 @@ export default function App() {
             >
               <Crosshair size={13} /> Teleport
             </button>
-            <button
-              className="dive-action-btn"
-              onClick={() => setMode('dive')}
-              title="Dive underwater at this exact coordinate"
-            >
-              <Navigation size={13} /> Dive In
-            </button>
+
+            {canDive ? (
+              <button
+                className="dive-action-btn"
+                onClick={() => setMode('dive')}
+                title="Dive underwater at this exact coordinate"
+              >
+                <Navigation size={13} /> Dive In
+              </button>
+            ) : (
+              <button
+                className="dive-action-btn disabled"
+                disabled
+                title={
+                  telemetry.is_land
+                    ? 'Cannot dive: Selected location is on continental landmass'
+                    : 'Ocean Dive simulation is exclusively calibrated for the Indian Ocean 4D Twin sector (20°E–125°E, 45°S–32°N)'
+                }
+              >
+                <Lock size={13} /> Dive Locked
+              </button>
+            )}
+
+            {!isInsideIndianOcean && (
+              <button
+                className="teleport-btn sector-jump-btn"
+                onClick={handleJumpToIndianOcean}
+                title="Return beacon to the Indian Ocean 4D Digital Twin sector"
+              >
+                <RotateCcw size={13} /> Return to Sector
+              </button>
+            )}
+
             <button
               className="dive-action-btn"
               onClick={() => setProfileOpen(true)}
