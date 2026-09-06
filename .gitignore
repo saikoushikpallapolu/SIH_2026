@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.env
+.env.*
+backend/.venv/
+**/__pycache__/
+*.pyc
+
+# Ocean data storage (large binaries managed via sync_data.py)
+data/raw/
+data/cache/
+data/processed/cubes/*.bin
+data/processed/terrain/*.bin
+data/processed/*.db
+!data/.gitkeep
+!data/processed/README.md
+!data/processed/terrain/bathymetry_meta.json
+!data/processed/terrain/*.png
+!data/processed/textures/*.png
+!data/processed/observations/*.json
+!data/processed/extreme_events/*.json
+!data/processed/cubes/*.json
