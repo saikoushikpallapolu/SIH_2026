@@ -77,6 +77,8 @@ export interface SubgridTelemetry {
 
 /**
  * Converts Geographic (Lat, Lon) to 3D Cartesian coordinates on a sphere.
+ * NOTE: z is negated to match Three.js SphereGeometry UV phi convention,
+ * where +90°E (Indian Ocean) maps to the -Z direction in local space.
  */
 export function latLngToVector3(latitude: number, longitude: number, radius = GLOBE_RADIUS): THREE.Vector3 {
   const lat = THREE.MathUtils.degToRad(latitude)
@@ -84,18 +86,19 @@ export function latLngToVector3(latitude: number, longitude: number, radius = GL
   return new THREE.Vector3(
     radius * Math.cos(lat) * Math.cos(lng),
     radius * Math.sin(lat),
-    radius * Math.cos(lat) * Math.sin(lng)
+    -radius * Math.cos(lat) * Math.sin(lng)
   )
 }
 
 /**
  * Converts 3D Cartesian coordinates on a sphere back to Geographic (Lat, Lon).
  * NOTE: Ensure the input vector is in the local sphere coordinate space!
+ * z is negated to match the latLngToVector3 convention.
  */
 export function vector3ToLatLng(point: THREE.Vector3): { latitude: number; longitude: number } {
   const p = point.clone().normalize()
   const lat = THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, p.y))))
-  const lon = THREE.MathUtils.radToDeg(Math.atan2(p.z, p.x))
+  const lon = THREE.MathUtils.radToDeg(Math.atan2(-p.z, p.x))
   return {
     latitude: Math.round(lat * 10000) / 10000,
     longitude: Math.round(lon * 10000) / 10000,

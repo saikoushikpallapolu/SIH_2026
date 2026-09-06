@@ -23,7 +23,9 @@ import {
 } from 'lucide-react'
 import GlobeScene from './GlobeScene'
 import ImmersiveOcean from './ImmersiveOcean'
-import { instruments } from './mockOceanData'
+import catalogData from '../data/processed/observations/instruments_catalog.json'
+import type { Instrument as CatalogInstrument } from './types'
+const instruments = catalogData as CatalogInstrument[]
 import {
   DEPTH_STOPS,
   isPointInIndianOcean,
@@ -54,6 +56,7 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>({ latitude: 12.5, longitude: 68.3 })
   const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
   const [teleportNonce, setTeleportNonce] = useState<number>(0)
+  const [showInstruments, setShowInstruments] = useState<boolean>(false)
   const [telemetry, setTelemetry] = useState<SubgridTelemetry | null>(null)
   const [profileOpen, setProfileOpen] = useState<boolean>(false)
   const [zenMode, setZenMode] = useState<boolean>(false)
@@ -126,7 +129,7 @@ export default function App() {
             timeIndex={monthIndex % 12}
             mode={mode}
             overlayStrength={0.78}
-            instruments={instruments}
+            instruments={showInstruments ? instruments : []}
             selection={selection}
             teleportNonce={teleportNonce}
             onInstrument={handleInstrumentSelect}
@@ -379,6 +382,15 @@ export default function App() {
                 <Wind size={13} />
                 <span>Streamlines</span>
                 <i style={{ color: '#00f2fe' }} />
+              </button>
+              <button
+                className={`var-pill ${showInstruments ? 'active' : ''}`}
+                onClick={() => setShowInstruments((v) => !v)}
+                title="Toggle Argo floats, BGC-Argo and Glider mission tracks"
+              >
+                <Navigation size={13} />
+                <span>Instruments</span>
+                <i style={{ color: '#ffcf66' }} />
               </button>
             </div>
 
