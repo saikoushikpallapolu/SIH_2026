@@ -1,0 +1,19 @@
+{
+  "event_id": "tsunami_2004",
+  "title": "2004 Great Indian Ocean Tsunami",
+  "date": "2004-12-26",
+  "affected_regions": [
+    "Sumatra",
+    "Andaman & Nicobar",
+    "Tamil Nadu (Chennai)",
+    "Sri Lanka",
+    "Maldives",
+    "Somalia"
+  ],
+  "epicenter": {
+    "lat": 3.316,
+    "lon": 95.854
+  },
+  "physics": "Barotropic long-gravity wave propagation c = sqrt(g*H)",
+  "simulation_file": "data\\processed\\cubes\\tsunami_2004_hourly.json"
+}

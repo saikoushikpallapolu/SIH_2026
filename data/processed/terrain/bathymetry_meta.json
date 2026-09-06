@@ -1,0 +1,13 @@
+{
+  "dataset": "NOAA NCEI ETOPO 2022 (Bedrock & Ice Surface)",
+  "spatial_resolution_deg": 0.25,
+  "n_lat": 309,
+  "n_lon": 421,
+  "lat_min": -44.99166666666667,
+  "lat_max": 32.008333333333326,
+  "lon_min": 20.008333333333326,
+  "lon_max": 125.00833333333333,
+  "min_depth_meters": -7165.5625,
+  "max_elevation_meters": 6523.90283203125,
+  "ocean_coverage_percent": 65.75575183143847
+}
