@@ -361,27 +361,25 @@ function OceanShader({
               fieldColor = paletteSpeed(jetSpeed) * (0.85 + advection * 0.35);
             }
 
-            // INDIAN OCEAN SECTOR MASK: Lon [20°E, 125°E], Lat [-45°S, 32°N]
-            // u = [0.5556, 0.8472], v = [0.2500, 0.6778]
-            float inLon = smoothstep(0.548, 0.560, vUv.x) * (1.0 - smoothstep(0.842, 0.854, vUv.x));
-            float inLat = smoothstep(0.242, 0.254, vUv.y) * (1.0 - smoothstep(0.672, 0.684, vUv.y));
-            float inIndianOcean = inLon * inLat;
-
-            // Subtle sector demarcation outline along ocean waters
-            float borderU = smoothstep(0.0035, 0.0, abs(vUv.x - 0.5556)) + smoothstep(0.0035, 0.0, abs(vUv.x - 0.8472));
-            float borderV = smoothstep(0.0045, 0.0, abs(vUv.y - 0.2500)) + smoothstep(0.0045, 0.0, abs(vUv.y - 0.6778));
-            float sectorPerimeter = clamp(borderU * inLat + borderV * inLon, 0.0, 1.0) * water * 0.4;
-
+            // GLOBAL OCEAN COVERAGE: All oceans (Pacific, Atlantic, Southern, Arctic, Indian)
+            // render continuous, physically grounded scientific fields worldwide.
             float light = max(dot(vNormal, normalize(vec3(1.0, 0.8, 1.2))), 0.0);
 
-            // Natural satellite ocean for Pacific, Atlantic, Arctic, etc.
-            vec3 naturalOcean = earth * (0.44 + light * 0.58);
+            // Indian Ocean High-Resolution 4D Digital Twin Sector [20°E, 125°E], [-45°S, 32°N]
+            float inLon = smoothstep(0.535, 0.565, vUv.x) * (1.0 - smoothstep(0.835, 0.865, vUv.x));
+            float inLat = smoothstep(0.235, 0.265, vUv.y) * (1.0 - smoothstep(0.665, 0.695, vUv.y));
+            float inIndianOcean = inLon * inLat;
 
-            // High-resolution 4D data twin for Indian Ocean domain
-            vec3 dataOcean = mix(earth, fieldColor * (0.54 + light * 0.72), uOverlayStrength);
+            // Global base data intensity with high-resolution enhancement in the Indian Ocean twin sector
+            float overlayIntensity = mix(uOverlayStrength * 0.72, uOverlayStrength * 1.05, inIndianOcean);
+            vec3 litOcean = mix(earth, fieldColor * (0.54 + light * 0.72), overlayIntensity);
 
-            // Blend: only the Indian Ocean domain displays the multimodal scientific overlay!
-            vec3 finalOcean = mix(naturalOcean, dataOcean, inIndianOcean) + vec3(0.0, 0.95, 1.0) * sectorPerimeter;
+            // Subtle sector perimeter indicator (soft glowing dashed outline framing the high-res twin)
+            float borderU = smoothstep(0.003, 0.0, abs(vUv.x - 0.5556)) + smoothstep(0.003, 0.0, abs(vUv.x - 0.8472));
+            float borderV = smoothstep(0.004, 0.0, abs(vUv.y - 0.2500)) + smoothstep(0.004, 0.0, abs(vUv.y - 0.6778));
+            float sectorOutline = clamp(borderU * inLat + borderV * inLon, 0.0, 1.0) * water * 0.35;
+
+            vec3 finalOcean = litOcean + vec3(0.0, 0.95, 1.0) * sectorOutline;
 
             // Clean land masking with zero color bleed
             gl_FragColor = vec4(mix(earth * (0.45 + light * 0.55), finalOcean, water), 1.0);
