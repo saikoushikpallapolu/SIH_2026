@@ -63,6 +63,12 @@ export function vector3ToLatLng(point: THREE.Vector3): { latitude: number; longi
  * Identifies the specific Indian Ocean marine sub-basin or regional feature.
  */
 export function identifyBasin(lat: number, lon: number): string {
+  // Check bounds of Indian Ocean Digital Twin domain [20°E-125°E, 45°S-32°N]
+  if (lat < -45) return 'Southern Ocean / Antarctic Belt'
+  if (lon < 20) return 'South Atlantic Ocean'
+  if (lon > 125) return 'Pacific Ocean Sector'
+  if (lat > 32) return 'Eurasian Sector'
+
   if (lat > 10 && lon < 43.5) return 'Red Sea / Bab-el-Mandeb'
   if (lat > 23 && lon >= 45 && lon <= 56.5) return 'Persian Gulf / Hormuz'
   if (lat >= 10 && lon >= 43.5 && lon <= 51) return 'Gulf of Aden'

@@ -358,15 +358,33 @@ function OceanShader({
               float flowDirY = cos(vUv.x * 6.28);
               float advection = sin(vPosition.x * 35.0 + vPosition.y * 25.0 - uTime * 3.8) * 0.5 + 0.5;
               float jetSpeed = clamp(0.22 + exp(-pow(latFromEq / 0.25, 2.0)) * 0.55 + advection * 0.22, 0.0, 1.0);
-
               fieldColor = paletteSpeed(jetSpeed) * (0.85 + advection * 0.35);
             }
 
+            // INDIAN OCEAN SECTOR MASK: Lon [20°E, 125°E], Lat [-45°S, 32°N]
+            // u = [0.5556, 0.8472], v = [0.2500, 0.6778]
+            float inLon = smoothstep(0.548, 0.560, vUv.x) * (1.0 - smoothstep(0.842, 0.854, vUv.x));
+            float inLat = smoothstep(0.242, 0.254, vUv.y) * (1.0 - smoothstep(0.672, 0.684, vUv.y));
+            float inIndianOcean = inLon * inLat;
+
+            // Subtle sector demarcation outline along ocean waters
+            float borderU = smoothstep(0.0035, 0.0, abs(vUv.x - 0.5556)) + smoothstep(0.0035, 0.0, abs(vUv.x - 0.8472));
+            float borderV = smoothstep(0.0045, 0.0, abs(vUv.y - 0.2500)) + smoothstep(0.0045, 0.0, abs(vUv.y - 0.6778));
+            float sectorPerimeter = clamp(borderU * inLat + borderV * inLon, 0.0, 1.0) * water * 0.4;
+
             float light = max(dot(vNormal, normalize(vec3(1.0, 0.8, 1.2))), 0.0);
-            vec3 litOcean = mix(earth, fieldColor * (0.54 + light * 0.72), uOverlayStrength);
+
+            // Natural satellite ocean for Pacific, Atlantic, Arctic, etc.
+            vec3 naturalOcean = earth * (0.44 + light * 0.58);
+
+            // High-resolution 4D data twin for Indian Ocean domain
+            vec3 dataOcean = mix(earth, fieldColor * (0.54 + light * 0.72), uOverlayStrength);
+
+            // Blend: only the Indian Ocean domain displays the multimodal scientific overlay!
+            vec3 finalOcean = mix(naturalOcean, dataOcean, inIndianOcean) + vec3(0.0, 0.95, 1.0) * sectorPerimeter;
 
             // Clean land masking with zero color bleed
-            gl_FragColor = vec4(mix(earth * (0.45 + light * 0.55), litOcean, water), 1.0);
+            gl_FragColor = vec4(mix(earth * (0.45 + light * 0.55), finalOcean, water), 1.0);
           }
         `,
       }),
@@ -555,6 +573,43 @@ export interface GlobeSceneProps {
   onSelectPoint: (selection: Selection) => void
 }
 
+function IndianOceanSectorBoundary() {
+  const points = useMemo(() => {
+    const pts: THREE.Vector3[] = []
+    const lonMin = 20, lonMax = 125
+    const latMin = -45, latMax = 32
+
+    // North border: lonMin -> lonMax at latMax (32°N)
+    for (let lon = lonMin; lon <= lonMax; lon += 2.5) {
+      pts.push(latLngToVector3(latMax, lon, RADIUS + 0.012))
+    }
+    // East border: latMax -> latMin at lonMax (125°E)
+    for (let lat = latMax; lat >= latMin; lat -= 2.5) {
+      pts.push(latLngToVector3(lat, lonMax, RADIUS + 0.012))
+    }
+    // South border: lonMax -> lonMin at latMin (-45°S)
+    for (let lon = lonMax; lon >= lonMin; lon -= 2.5) {
+      pts.push(latLngToVector3(latMin, lon, RADIUS + 0.012))
+    }
+    // West border: latMin -> latMax at lonMin (20°E)
+    for (let lat = latMin; lat <= latMax; lat += 2.5) {
+      pts.push(latLngToVector3(lat, lonMin, RADIUS + 0.012))
+    }
+    pts.push(latLngToVector3(latMax, lonMin, RADIUS + 0.012))
+    return pts
+  }, [])
+
+  return (
+    <Line
+      points={points}
+      color="#00f2fe"
+      lineWidth={1.0}
+      transparent
+      opacity={0.38}
+    />
+  )
+}
+
 function Scene({
   variable,
   depth,
@@ -609,6 +664,9 @@ function Scene({
             opacity={0.14}
           />
         ))}
+
+        {/* Indian Ocean Digital Twin Observation Boundary [20°E-125°E, 45°S-32°N] */}
+        <IndianOceanSectorBoundary />
 
         {/* Real Geodesic Streamline Flow Particles */}
         <StreamlineParticles

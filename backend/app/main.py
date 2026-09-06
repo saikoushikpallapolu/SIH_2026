@@ -106,6 +106,15 @@ def get_db_connection() -> sqlite3.Connection | None:
 
 def identify_basin(lat: float, lon: float) -> str:
     """Identify the Indian Ocean marine basin or feature from coordinates."""
+    if lat < -45:
+        return "Southern Ocean / Antarctic Belt"
+    if lon < 20:
+        return "South Atlantic Ocean (Outside Sector)"
+    if lon > 125:
+        return "Pacific Ocean Sector (Outside Sector)"
+    if lat > 32:
+        return "Eurasian Sector"
+
     if lat > 10 and lon < 43.5:
         return "Red Sea / Bab-el-Mandeb"
     if lat > 23 and 45 <= lon <= 56.5:
