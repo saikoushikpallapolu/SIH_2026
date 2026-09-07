@@ -726,25 +726,123 @@ function Marker({
   instrument: Instrument
   onSelect: (instrument: Instrument) => void
 }) {
-  const point = latLngToVector3(instrument.latitude, instrument.longitude, RADIUS + 0.045)
-  const color = instrument.kind === 'Glider' ? '#ffcf66' : instrument.kind === 'BGC-Argo' ? '#9b83ff' : '#72e8ff'
+  const groupRef = useRef<THREE.Group>(null)
+  const { camera } = useThree()
+
+  const point = useMemo(
+    () => latLngToVector3(instrument.latitude, instrument.longitude, RADIUS + 0.042),
+    [instrument.latitude, instrument.longitude]
+  )
+
+  // Color scheme per instrument type
+  const color =
+    instrument.kind === 'Glider'
+      ? '#ffcf66'
+      : instrument.kind === 'BGC-Argo'
+        ? '#c084fc'
+        : '#38bdf8'
+
+  // Glider: build a long sinusoidal back-trace path using heading
+  // 20° arc ≈ 2200 km, with lateral meander simulating ocean-current drift
+  const trailPoints = useMemo(() => {
+    if (instrument.kind !== 'Glider' || instrument.heading === undefined) return null
+
+    const backHeadingRad = THREE.MathUtils.degToRad(instrument.heading + 180)
+    // Forward direction components (lat/lon axes)
+    const dLat = Math.cos(backHeadingRad)
+    const dLon = Math.sin(backHeadingRad)
+    // Perpendicular (90° left of travel direction) for lateral meander
+    const pLat = -dLon
+    const pLon = dLat
+    const cosLat = Math.max(0.15, Math.cos(THREE.MathUtils.degToRad(instrument.latitude)))
+
+    const steps = 80        // high step count for smooth curve
+    const totalDistDeg = 20 // ~2200 km path length
+    const meanderAmp = 2.8  // arc amplitude in degrees (wider single bow)
+    const meanderFreq = 0.5 // half sine cycle = one smooth circular arc
+    const pts: THREE.Vector3[] = []
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const dist = t * totalDistDeg
+      // Sinusoidal lateral offset — grows from 0, peaks mid-track, fades near tail
+      const envelope = Math.sin(t * Math.PI) // fade in & out at ends
+      const lateral = meanderAmp * envelope * Math.sin(t * meanderFreq * 2 * Math.PI)
+
+      const lat = instrument.latitude + dLat * dist + pLat * lateral
+      const lon = instrument.longitude + (dLon * dist + pLon * lateral) / cosLat
+
+      // Stop trail the moment it crosses onto land — gliders can't traverse land
+      if (i > 0 && isDryLand(lat, lon)) break
+
+      pts.push(latLngToVector3(lat, lon, RADIUS + 0.028))
+    }
+    return pts
+  }, [instrument])
+
+  // Scale marker dot with camera distance so it stays legible at any zoom
+  useFrame(() => {
+    if (!groupRef.current) return
+    const dist = camera.position.length()
+    const s = THREE.MathUtils.clamp(dist * 0.15, 0.32, 1.2)
+    groupRef.current.scale.setScalar(s)
+  })
 
   return (
     <group
-      position={point}
       onClick={(event) => {
         event.stopPropagation()
         onSelect(instrument)
       }}
     >
-      <mesh>
-        <sphereGeometry args={[0.035, 16, 16]} />
-        <meshBasicMaterial color={color} />
-      </mesh>
-      <mesh scale={1.8}>
-        <sphereGeometry args={[0.035, 16, 16]} />
-        <meshBasicMaterial color={color} transparent opacity={0.2} />
-      </mesh>
+      {/* Glider: wide sinusoidal mission track with multi-layer glow */}
+      {trailPoints && (
+        <>
+          {/* Wide soft outer glow */}
+          <Line
+            points={trailPoints}
+            color="#ffcf66"
+            lineWidth={9}
+            transparent
+            opacity={0.10}
+          />
+          {/* Mid glow band */}
+          <Line
+            points={trailPoints}
+            color="#ffde80"
+            lineWidth={5}
+            transparent
+            opacity={0.22}
+          />
+          {/* Core bright line */}
+          <Line
+            points={trailPoints}
+            color="#ffe599"
+            lineWidth={2.2}
+            transparent
+            opacity={0.88}
+          />
+        </>
+      )}
+
+      {/* Dot marker — smaller, 3-layer halo */}
+      <group ref={groupRef} position={point}>
+        {/* Outer soft halo */}
+        <mesh>
+          <sphereGeometry args={[0.045, 16, 16]} />
+          <meshBasicMaterial color={color} transparent opacity={0.10} />
+        </mesh>
+        {/* Mid glow */}
+        <mesh>
+          <sphereGeometry args={[0.030, 16, 16]} />
+          <meshBasicMaterial color={color} transparent opacity={0.32} />
+        </mesh>
+        {/* Solid core */}
+        <mesh>
+          <sphereGeometry args={[0.016, 16, 16]} />
+          <meshBasicMaterial color={color} />
+        </mesh>
+      </group>
     </group>
   )
 }
