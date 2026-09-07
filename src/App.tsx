@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
+  AlertTriangle,
+  Clock,
   Compass,
   Crosshair,
   Droplets,
@@ -10,16 +12,17 @@ import {
   Layers3,
   Lock,
   MapPin,
-  Maximize2,
   Navigation,
   Pause,
   Play,
+  Radio,
   RotateCcw,
   SlidersHorizontal,
   Thermometer,
   Waves,
   Wind,
   X,
+  Zap,
 } from 'lucide-react'
 import GlobeScene from './GlobeScene'
 import ImmersiveOcean from './ImmersiveOcean'
@@ -27,13 +30,17 @@ import catalogData from '../data/processed/observations/instruments_catalog.json
 import type { Instrument as CatalogInstrument } from './types'
 const instruments = catalogData as CatalogInstrument[]
 import {
+  CURRENT_SYSTEMS,
   DEPTH_STOPS,
+  getCompassHeading,
+  getTsunamiScenarioById,
   isPointInIndianOcean,
   querySubgridTelemetry,
   SCIENTIFIC_PALETTES,
+  TSUNAMI_SCENARIOS,
   type SubgridTelemetry,
 } from './oceanDataEngine'
-import type { Instrument, OceanVariable, Selection, ViewMode } from './types'
+import type { CoastalStation, CurrentSystem, Instrument, OceanVariable, Selection, TsunamiScenario, ViewMode } from './types'
 
 // Converts month index 0..299 into readable year/month
 function formatEpoch(monthIndex: number): string {
@@ -47,13 +54,49 @@ function formatEpoch(monthIndex: number): string {
   return `${month} ${year}${tag}`
 }
 
+// Converts decimal hours after scenario earthquake origin into formatted UTC clock
+function formatScenarioTime(originIso: string, hours: number): string {
+  try {
+    const originMs = new Date(originIso).getTime()
+    const currentMs = originMs + hours * 3600 * 1000
+    const date = new Date(currentMs)
+    const hh = date.getUTCHours().toString().padStart(2, '0')
+    const mm = date.getUTCMinutes().toString().padStart(2, '0')
+    const ss = date.getUTCSeconds().toString().padStart(2, '0')
+    return `${hh}:${mm}:${ss} UTC`
+  } catch {
+    return `+${hours.toFixed(2)}h`
+  }
+}
+
 export default function App() {
-  const [variable, setVariable] = useState<OceanVariable>('temperature')
-  const [mode, setMode] = useState<ViewMode>('explore')
-  const [depth, setDepth] = useState<number>(25)
+  const [mode, setMode] = useState<ViewMode>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('mode')
+      if (p === 'explore' || p === 'currents' || p === 'dive') return p
+    } catch {}
+    return 'tsunami'
+  })
+  const [variable, setVariable] = useState<OceanVariable>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('mode')
+      if (p === 'currents') return 'currents'
+    } catch {}
+    return 'temperature'
+  })
+  const [depth, setDepth] = useState<number>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('depth')
+      if (p) {
+        const val = parseInt(p, 10)
+        if (!isNaN(val)) return val
+      }
+    } catch {}
+    return 25
+  })
   const [monthIndex, setMonthIndex] = useState<number>(292) // May 2024 pre-monsoon heatwave baseline
   const [isPlaying, setIsPlaying] = useState<boolean>(false)
-  const [selection, setSelection] = useState<Selection>({ latitude: 12.5, longitude: 68.3 })
+  const [selection, setSelection] = useState<Selection>({ latitude: 3.316, longitude: 95.854 })
   const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
   const [teleportNonce, setTeleportNonce] = useState<number>(0)
   const [showInstruments, setShowInstruments] = useState<boolean>(false)
@@ -61,6 +104,36 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState<boolean>(false)
   const [zenMode, setZenMode] = useState<boolean>(false)
   const [diveTelemetry, setDiveTelemetry] = useState({ depth: 460, temperature: 26.1 })
+
+  // Currents Mode State
+  const [showStreamlines, setShowStreamlines] = useState<boolean>(true)
+  const [showParticles, setShowParticles] = useState<boolean>(true)
+  const [flowIntensity, setFlowIntensity] = useState<number>(1.0)
+  const [flowSpeed, setFlowSpeed] = useState<number>(1.0)
+  const [showVectorArrows, setShowVectorArrows] = useState<boolean>(false)
+  const [showCurrentLabels, setShowCurrentLabels] = useState<boolean>(true)
+  const [selectedCurrentSystem, setSelectedCurrentSystem] = useState<CurrentSystem | null>(null)
+
+  // Tsunami Simulation State & Scenario Selector
+  const [selectedTsunamiId, setSelectedTsunamiId] = useState<string>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('scenario')
+      if (p) return p
+    } catch {}
+    return '2004_sumatra'
+  })
+  const activeScenario = useMemo(() => getTsunamiScenarioById(selectedTsunamiId), [selectedTsunamiId])
+  const [tsunamiHour, setTsunamiHour] = useState<number>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('hour')
+      if (p) return parseFloat(p)
+    } catch {}
+    return 2.15
+  })
+  const [isTsunamiPlaying, setIsTsunamiPlaying] = useState<boolean>(true)
+  const [tsunamiSpeed, setTsunamiSpeed] = useState<number>(1)
+  const [showIsochrones, setShowIsochrones] = useState<boolean>(true)
+  const [selectedStation, setSelectedStation] = useState<CoastalStation | null>(null)
 
   // Query live subgrid telemetry on selection, depth, or time change
   useEffect(() => {
@@ -73,14 +146,39 @@ export default function App() {
     }
   }, [selection, depth, monthIndex])
 
-  // Playback timer for 25-year time steps
+  // Playback timer for 25-year time steps (Explore mode)
   useEffect(() => {
-    if (!isPlaying) return
+    if (!isPlaying || mode === 'tsunami') return
     const timer = window.setInterval(() => {
       setMonthIndex((prev) => (prev + 1) % 300)
     }, 1200)
     return () => window.clearInterval(timer)
-  }, [isPlaying])
+  }, [isPlaying, mode])
+
+  // Playback timer for Tsunami shockwave simulation (smooth 60fps continuous animation)
+  useEffect(() => {
+    if (!isTsunamiPlaying || mode !== 'tsunami') return
+    let animId: number
+    let lastTime = performance.now()
+
+    const loop = (now: number) => {
+      const deltaSec = (now - lastTime) / 1000
+      lastTime = now
+
+      // Smooth elapsed hours progression: 1 hr simulation per ~4 seconds at 1x
+      const rate = 0.25 * tsunamiSpeed
+      setTsunamiHour((prev) => {
+        const next = prev + deltaSec * rate
+        if (next > 11.0) return 0.0
+        return Math.round(next * 1000) / 1000
+      })
+
+      animId = requestAnimationFrame(loop)
+    }
+
+    animId = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(animId)
+  }, [isTsunamiPlaying, tsunamiSpeed, mode])
 
   const palette = SCIENTIFIC_PALETTES[variable]
 
@@ -104,9 +202,42 @@ export default function App() {
     setTeleportNonce(Date.now())
   }
 
+  const handleCurrentSystemSelect = (sys: CurrentSystem) => {
+    setSelectedCurrentSystem(sys)
+    setSelection({ latitude: sys.lat, longitude: sys.lon })
+    setTeleportNonce(Date.now())
+  }
+
+  const handleStationSelect = (st: CoastalStation) => {
+    setSelectedStation(st)
+    setSelection({ latitude: st.lat, longitude: st.lon })
+    setTeleportNonce(Date.now())
+  }
+
   const handleTeleportCamera = () => {
     setTeleportNonce(Date.now())
   }
+
+  const handleScenarioChange = (id: string) => {
+    setSelectedTsunamiId(id)
+    const sc = getTsunamiScenarioById(id)
+    setTsunamiHour(0.0)
+    setIsTsunamiPlaying(true)
+    setSelectedStation(null)
+    setSelection({ latitude: sc.epicenter.latitude, longitude: sc.epicenter.longitude })
+    setTeleportNonce(Date.now())
+  }
+
+  // Calculate compass bearing for currently selected coordinate
+  const compass = useMemo(() => {
+    if (!telemetry) return { deg: 0, label: '000° N', knots: 0 }
+    return getCompassHeading(telemetry.current_vector.u, telemetry.current_vector.v)
+  }, [telemetry])
+
+  // Active scenario impacted stations calculation
+  const impactedStations = useMemo(() => {
+    return activeScenario.coastal_stations.filter((st) => tsunamiHour >= st.arrival_hours)
+  }, [activeScenario, tsunamiHour])
 
   return (
     <main className="app-shell">
@@ -132,8 +263,20 @@ export default function App() {
             instruments={showInstruments ? instruments : []}
             selection={selection}
             teleportNonce={teleportNonce}
+            showVectorArrows={showVectorArrows}
+            showCurrentLabels={showCurrentLabels}
+            showStreamlines={showStreamlines}
+            showParticles={showParticles}
+            flowIntensity={flowIntensity}
+            flowSpeed={flowSpeed}
+            showIsochrones={showIsochrones}
+            tsunamiHour={tsunamiHour}
+            tsunamiScenario={activeScenario}
+            selectedStation={selectedStation}
             onInstrument={handleInstrumentSelect}
             onSelectPoint={handlePointSelect}
+            onSelectStation={handleStationSelect}
+            onSelectCurrentSystem={handleCurrentSystemSelect}
           />
         )}
       </div>
@@ -154,9 +297,34 @@ export default function App() {
           <div className="nav-center">
             <button
               className={mode === 'explore' ? 'active' : ''}
-              onClick={() => setMode('explore')}
+              onClick={() => {
+                setMode('explore')
+                setIsTsunamiPlaying(false)
+              }}
             >
               <Globe2 size={14} /> Globe
+            </button>
+            <button
+              className={mode === 'currents' ? 'active' : ''}
+              onClick={() => {
+                setMode('currents')
+                setVariable('currents')
+                setIsTsunamiPlaying(false)
+              }}
+            >
+              <Wind size={14} /> Ocean Currents
+            </button>
+            <button
+              className={mode === 'tsunami' ? 'active' : ''}
+              onClick={() => {
+                setMode('tsunami')
+                setIsPlaying(false)
+                setIsTsunamiPlaying(true)
+                setSelection({ latitude: activeScenario.epicenter.latitude, longitude: activeScenario.epicenter.longitude })
+                setTeleportNonce(Date.now())
+              }}
+            >
+              <Radio size={14} /> Tsunami Visualisation
             </button>
             <button
               className={mode === 'dive' ? 'active' : ''}
@@ -165,6 +333,7 @@ export default function App() {
                   handleJumpToIndianOcean()
                 }
                 setMode('dive')
+                setIsTsunamiPlaying(false)
               }}
               title={
                 canDive
@@ -177,10 +346,22 @@ export default function App() {
           </div>
 
           <div className="topbar-actions">
-            <div className="status-badge">
-              <span className="pulse" />
-              <span>25-YR ATLAS</span>
-            </div>
+            {mode === 'tsunami' ? (
+              <div className="status-badge alert">
+                <span className="pulse red" />
+                <span>{activeScenario.shortName.toUpperCase()} PROPAGATION</span>
+              </div>
+            ) : mode === 'currents' ? (
+              <div className="status-badge currents">
+                <span className="pulse cyan" />
+                <span>GEOSTROPHIC & JET CURRENTS</span>
+              </div>
+            ) : (
+              <div className="status-badge">
+                <span className="pulse" />
+                <span>25-YR ATLAS</span>
+              </div>
+            )}
             <button
               className="icon-btn"
               onClick={() => setZenMode(true)}
@@ -205,7 +386,7 @@ export default function App() {
         </button>
       )}
 
-      {/* Minimalist Floating Sub-Grid Telemetry Card */}
+      {/* 1. GENERAL EXPLORE MODE: Sub-Grid Telemetry Card */}
       {!zenMode && mode === 'explore' && telemetry && (
         <section className="subgrid-card glass">
           <div className="basin-badge">
@@ -313,6 +494,398 @@ export default function App() {
         </section>
       )}
 
+      {/* 2. CURRENTS MODE: Floating Direction & Velocity Compass Probe HUD */}
+      {!zenMode && mode === 'currents' && telemetry && (
+        <aside className="currents-probe-card glass">
+          <div className="probe-header">
+            <div className="probe-title">
+              <Wind size={15} color="#00f2fe" />
+              <span>CURRENT VELOCITY & BEARING</span>
+            </div>
+            <div className="subgrid-coords-compact">
+              {Math.abs(telemetry.coordinate.latitude).toFixed(2)}°
+              {telemetry.coordinate.latitude >= 0 ? 'N' : 'S'} ·{' '}
+              {Math.abs(telemetry.coordinate.longitude).toFixed(2)}°
+              {telemetry.coordinate.longitude >= 0 ? 'E' : 'W'}
+            </div>
+          </div>
+
+          {/* Compass Gauge + Speed */}
+          <div className="compass-gauge-wrap">
+            <div className="compass-dial">
+              <div
+                className="compass-needle"
+                style={{ transform: `rotate(${compass.deg}deg)` }}
+              >
+                <div className="needle-head" />
+                <div className="needle-tail" />
+              </div>
+              <span className="cardinal n">N</span>
+              <span className="cardinal e">E</span>
+              <span className="cardinal s">S</span>
+              <span className="cardinal w">W</span>
+            </div>
+
+            <div className="compass-readings">
+              <div className="reading-big">
+                <strong>{telemetry.current_speed_m_s.toFixed(2)}</strong>
+                <span>m/s</span>
+                <small>({compass.knots} kn)</small>
+              </div>
+              <div className="heading-badge">
+                <Compass size={12} />
+                <span>Bearing: <b>{compass.label}</b></span>
+              </div>
+            </div>
+          </div>
+
+          {/* U and V Velocity Vector Components */}
+          <div className="vector-components-grid">
+            <div className="comp-box">
+              <span>ZONAL (u: East/West)</span>
+              <strong>
+                {telemetry.current_vector.u >= 0 ? '+' : ''}
+                {telemetry.current_vector.u.toFixed(2)}
+                <small>m/s</small>
+              </strong>
+            </div>
+            <div className="comp-box">
+              <span>MERIDIONAL (v: North/South)</span>
+              <strong>
+                {telemetry.current_vector.v >= 0 ? '+' : ''}
+                {telemetry.current_vector.v.toFixed(2)}
+                <small>m/s</small>
+              </strong>
+            </div>
+          </div>
+
+          {/* Fluid Flow Streamline & Motion Controls */}
+          <div className="currents-toggle-row">
+            <button
+              className={`toggle-pill ${showStreamlines ? 'active' : ''}`}
+              onClick={() => setShowStreamlines((v) => !v)}
+              title="Toggle continuous curved ocean flow streamlines"
+            >
+              <Waves size={12} />
+              <span>Streamlines: {showStreamlines ? 'ON' : 'OFF'}</span>
+            </button>
+            <button
+              className={`toggle-pill ${showParticles ? 'active' : ''}`}
+              onClick={() => setShowParticles((v) => !v)}
+              title="Toggle luminous flow particles and glowing trails"
+            >
+              <Zap size={12} />
+              <span>Particles: {showParticles ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
+          {/* Flow Speed & Intensity Sliders */}
+          <div className="flow-sliders-wrap">
+            <div className="flow-slider-row">
+              <span className="flow-slider-label">Flow Speed</span>
+              <input
+                type="range"
+                min={0.5}
+                max={2.5}
+                step={0.1}
+                value={flowSpeed}
+                onChange={(e) => setFlowSpeed(parseFloat(e.target.value))}
+                className="flow-range"
+              />
+              <span className="flow-slider-val">{flowSpeed.toFixed(1)}x</span>
+            </div>
+            <div className="flow-slider-row">
+              <span className="flow-slider-label">Intensity</span>
+              <input
+                type="range"
+                min={0.4}
+                max={1.6}
+                step={0.1}
+                value={flowIntensity}
+                onChange={(e) => setFlowIntensity(parseFloat(e.target.value))}
+                className="flow-range"
+              />
+              <span className="flow-slider-val">{Math.round(flowIntensity * 100)}%</span>
+            </div>
+          </div>
+
+          {/* Major Current Systems Quick-Swoop Selector */}
+          <div className="current-systems-selector">
+            <div className="selector-title">
+              <span>MAJOR INDIAN OCEAN CURRENTS (CLICK TO FLY)</span>
+            </div>
+            <div className="systems-pills-scroll">
+              {CURRENT_SYSTEMS.map((sys) => (
+                <button
+                  key={sys.id}
+                  className={`sys-pill ${selectedCurrentSystem?.id === sys.id ? 'active' : ''}`}
+                  onClick={() => handleCurrentSystemSelect(sys)}
+                >
+                  <b>{sys.name}</b>
+                  <small>{sys.flowDirection}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        </aside>
+      )}
+
+      {/* 3. TSUNAMI MODE: Dedicated Scenario-Driven Telemetry & Station Impact HUD */}
+      {!zenMode && mode === 'tsunami' && (
+        <aside className="tsunami-telemetry-card glass">
+          {/* Scenario Selector Dropdown */}
+          <div className="tsunami-scenario-selector-wrap">
+            <div className="scenario-selector-label">
+              <SlidersHorizontal size={13} color="#00e5ff" />
+              <span>SELECT TSUNAMI PROPAGATION SCENARIO:</span>
+            </div>
+            <select
+              className="scenario-select-dropdown"
+              value={selectedTsunamiId}
+              onChange={(e) => handleScenarioChange(e.target.value)}
+              title="Select which historical Indian Ocean tsunami propagation to view"
+            >
+              {TSUNAMI_SCENARIOS.map((sc) => (
+                <option key={sc.id} value={sc.id}>
+                  {sc.title} ({sc.magnitude ? `Mw ${sc.magnitude}` : sc.shortName})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="tsunami-header">
+            <div className="tsunami-title">
+              <Radio size={16} color="#ff3d00" />
+              <div>
+                <strong>{activeScenario.title.toUpperCase()}</strong>
+                <span>{activeScenario.origin_time_label}</span>
+              </div>
+            </div>
+            <div className="tsunami-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                className="recenter-ocean-btn glass"
+                onClick={() => {
+                  setSelection({ latitude: activeScenario.epicenter.latitude, longitude: activeScenario.epicenter.longitude })
+                  setTeleportNonce(Date.now())
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 10,
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  color: '#00e5ff',
+                  border: '1px solid rgba(0, 229, 255, 0.25)',
+                  cursor: 'pointer',
+                  background: 'rgba(0, 229, 255, 0.08)'
+                }}
+                title="Recenter camera on Indian Ocean basin & epicenter"
+              >
+                <Compass size={11} /> Recenter Ocean
+              </button>
+              <div className="tsunami-timer-badge">
+                <Clock size={12} />
+                <span>+{tsunamiHour.toFixed(2)}h elapsed</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="scenario-briefing-card">
+            <div className="briefing-row">
+              <span className="brief-label">FAULT MECHANISM:</span>
+              <span className="brief-val">{activeScenario.mechanism}</span>
+            </div>
+            <p className="scenario-desc">{activeScenario.description}</p>
+            <div className="incois-impact-badge">
+              <span className="incois-tag">INCOIS EARLY WARNING SIGNIFICANCE:</span>
+              <p>{activeScenario.incois_significance}</p>
+            </div>
+          </div>
+
+          <div className="tsunami-stats-grid">
+            <div className="stat-card">
+              <span>SIMULATION UTC</span>
+              <strong>{formatScenarioTime(activeScenario.origin_time, tsunamiHour)}</strong>
+            </div>
+            <div className="stat-card">
+              <span>WAVEFRONT RADIUS</span>
+              <strong>
+                {Math.round(tsunamiHour * activeScenario.open_ocean_speed_kmh).toLocaleString()}
+                <small>km</small>
+              </strong>
+            </div>
+            <div className="stat-card">
+              <span>OPEN OCEAN SPEED</span>
+              <strong>
+                {activeScenario.open_ocean_speed_kmh} <small>km/h</small>
+              </strong>
+            </div>
+            <div className="stat-card alert">
+              <span>COASTAL STATIONS HIT</span>
+              <strong style={{ color: '#ff5252' }}>
+                {impactedStations.length} / {activeScenario.coastal_stations.length}
+              </strong>
+            </div>
+          </div>
+
+          {/* Selected Station Details Card */}
+          {selectedStation && (
+            <div className="station-detail-dossier glass">
+              <div className="station-dossier-header">
+                <div>
+                  <h4>{selectedStation.name}</h4>
+                  <span>{selectedStation.region} · {selectedStation.dist_km.toLocaleString()} km from epicenter</span>
+                </div>
+                <button className="icon-btn" onClick={() => setSelectedStation(null)}>
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="station-dossier-grid">
+                <div>
+                  <span>ETA / ARRIVAL</span>
+                  <b>+{selectedStation.arrival_hours.toFixed(2)}h ({selectedStation.arrival_utc})</b>
+                </div>
+                <div>
+                  <span>MAX WAVE RUNUP</span>
+                  <b style={{ color: '#ff5252', fontSize: 16 }}>{selectedStation.wave_height_m} m</b>
+                </div>
+                <div style={{ gridColumn: 'span 2' }}>
+                  <span>HISTORICAL IMPACT</span>
+                  <p>{selectedStation.status}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Impacted Stations Ticker */}
+          <div className="impact-ticker-wrap">
+            <div className="ticker-label">
+              <AlertTriangle size={12} color="#ffab00" />
+              <span>COASTAL STATIONS ({activeScenario.coastal_stations.length})</span>
+            </div>
+            <div className="ticker-stations-list">
+              {activeScenario.coastal_stations.map((st) => {
+                const isHit = tsunamiHour >= st.arrival_hours
+                return (
+                  <div
+                    key={st.id}
+                    className={`ticker-item ${isHit ? 'hit' : 'pending'} ${selectedStation?.id === st.id ? 'active' : ''}`}
+                    onClick={() => handleStationSelect(st)}
+                  >
+                    <span className="dot" />
+                    <span className="name">{st.name}</span>
+                    <span className="time">+{st.arrival_hours.toFixed(1)}h</span>
+                    {isHit ? (
+                      <b className="height">{st.wave_height_m}m</b>
+                    ) : (
+                      <small className="eta">ETA</small>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </aside>
+      )}
+
+      {/* 3. TSUNAMI MODE: Dedicated Video-Player Time Scrubber Dock */}
+      {!zenMode && mode === 'tsunami' && (
+        <footer className="tsunami-bottom-dock glass">
+          <div className="tsunami-controls-top">
+            <div className="player-transport">
+              <button
+                className="play-btn-big"
+                onClick={() => setIsTsunamiPlaying((p) => !p)}
+                aria-label={isTsunamiPlaying ? 'Pause' : 'Play'}
+              >
+                {isTsunamiPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
+              </button>
+
+              <button
+                className="icon-transport-btn"
+                onClick={() => setTsunamiHour(0.0)}
+                title="Reset to 0h (Earthquake origin)"
+              >
+                <RotateCcw size={14} />
+              </button>
+
+              <button
+                className="icon-transport-btn"
+                onClick={() => setTsunamiHour((h) => Math.max(0, Math.round((h - 0.25) * 100) / 100))}
+                title="Step -15 minutes"
+              >
+                -15m
+              </button>
+
+              <button
+                className="icon-transport-btn"
+                onClick={() => setTsunamiHour((h) => Math.min(12.0, Math.round((h + 0.25) * 100) / 100))}
+                title="Step +15 minutes"
+              >
+                +15m
+              </button>
+
+              <div className="speed-pills">
+                {[1, 2, 5].map((spd) => (
+                  <button
+                    key={spd}
+                    className={tsunamiSpeed === spd ? 'active' : ''}
+                    onClick={() => setTsunamiSpeed(spd)}
+                  >
+                    {spd}x
+                  </button>
+                ))}
+              </div>
+
+              <button
+                className={`icon-transport-btn ${showIsochrones ? 'active' : ''}`}
+                onClick={() => setShowIsochrones((v) => !v)}
+                title="Toggle Travel-Time Isochrone Contours"
+                style={{ fontSize: '11px', fontWeight: 600, padding: '0 8px', width: 'auto' }}
+              >
+                Contours
+              </button>
+            </div>
+
+            {/* Time Scrubber Slider */}
+            <div className="tsunami-slider-wrap">
+              <div className="slider-label-row">
+                <span>0.0h Origin</span>
+                <span className="active-hour">
+                  T+{tsunamiHour.toFixed(2)}h · {formatScenarioTime(activeScenario.origin_time, tsunamiHour)}
+                </span>
+                <span>12.0h Elapsed</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="12"
+                step="0.05"
+                value={tsunamiHour}
+                onChange={(e) => setTsunamiHour(Number(e.target.value))}
+                title="Scrub tsunami shockwave propagation across Indian Ocean"
+              />
+            </div>
+          </div>
+
+          {/* Dynamic Scenario Milestone Jumps */}
+          <div className="milestone-jumps-row">
+            <span className="milestone-label">KEY MILESTONES:</span>
+            {activeScenario.milestones.map((m, idx) => (
+              <button
+                key={idx}
+                className={`milestone-btn ${Math.abs(tsunamiHour - m.hour) < 0.15 ? 'active' : ''}`}
+                onClick={() => setTsunamiHour(m.hour)}
+                title={m.desc}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </footer>
+      )}
+
       {/* Dive HUD (Minimalist) */}
       {!zenMode && mode === 'dive' && (
         <>
@@ -341,8 +914,8 @@ export default function App() {
         </>
       )}
 
-      {/* Minimalist Floating Bottom Dock */}
-      {!zenMode && mode === 'explore' && (
+      {/* Standard Floating Bottom Dock for Explore & Currents Mode */}
+      {!zenMode && mode !== 'tsunami' && mode !== 'dive' && (
         <footer className="bottom-dock glass">
           <div className="dock-top-row">
             {/* Variable Pills */}
@@ -376,7 +949,10 @@ export default function App() {
               </button>
               <button
                 className={`var-pill ${variable === 'currents' ? 'active' : ''}`}
-                onClick={() => setVariable('currents')}
+                onClick={() => {
+                  setVariable('currents')
+                  setMode('currents')
+                }}
                 title="cmocean speed: Active Geodesic Streamline Flow"
               >
                 <Wind size={13} />
@@ -492,7 +1068,6 @@ function DepthProfileChart({
   const temps = telemetry.ctd_profile.temperatures
   const depths = DEPTH_STOPS.slice(0, temps.length)
 
-  // Map temps (range 2..32) and depths (0..2000m for plot display)
   const minTemp = 2
   const maxTemp = 32
   const maxPlotDepth = 2000
@@ -516,7 +1091,6 @@ function DepthProfileChart({
 
   return (
     <svg className="profile-chart-svg" viewBox={`0 0 ${width} ${height}`}>
-      {/* Grid lines */}
       {[0, 500, 1000, 1500, 2000].map((d) => {
         const y = padT + (d / maxPlotDepth) * (height - padT - padB)
         return (
@@ -529,7 +1103,6 @@ function DepthProfileChart({
         )
       })}
 
-      {/* Temperature ticks at bottom */}
       {[5, 15, 25].map((tempVal) => {
         const x = padL + ((tempVal - minTemp) / (maxTemp - minTemp)) * (width - padL - padR)
         return (
@@ -542,7 +1115,6 @@ function DepthProfileChart({
         )
       })}
 
-      {/* Temperature Curve */}
       <polyline
         points={points}
         fill="none"
@@ -552,7 +1124,6 @@ function DepthProfileChart({
         strokeLinejoin="round"
       />
 
-      {/* Depth indicator line */}
       <line
         x1={padL}
         x2={width - padR}

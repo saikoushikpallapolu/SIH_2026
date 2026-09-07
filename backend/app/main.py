@@ -284,6 +284,55 @@ def subgrid_telemetry(
     }
 
 
+@app.get("/api/currents/vectors")
+def currents_vectors(
+    month: int = Query(292, ge=0, le=299),
+    stride: int = Query(6, ge=2, le=20),
+    min_speed: float = Query(0.04, ge=0.0),
+) -> dict:
+    """Return sampled velocity vector field (lat, lon, u, v, speed, heading_deg) across the Indian Ocean."""
+    u_mem = get_u_memmap()
+    v_mem = get_v_memmap()
+    bath = get_bath_memmap()
+
+    vectors = []
+    lats = np.linspace(LAT_MIN, LAT_MAX, N_LAT)
+    lons = np.linspace(LON_MIN, LON_MAX, N_LON)
+
+    if u_mem is not None and v_mem is not None:
+        u_slice = u_mem[month]
+        v_slice = v_mem[month]
+        for i in range(0, N_LAT, stride):
+            lat = float(lats[i])
+            for j in range(0, N_LON, stride):
+                if bath is not None and bath[i, j] >= 0.0:
+                    continue
+                u_val = float(u_slice[i, j])
+                v_val = float(v_slice[i, j])
+                speed = float(np.sqrt(u_val * u_val + v_val * v_val))
+                if speed < min_speed:
+                    continue
+                # Heading in degrees clockwise from North (0=N, 90=E, 180=S, 270=W)
+                heading = float((np.degrees(np.arctan2(u_val, v_val)) + 360.0) % 360.0)
+                vectors.append({
+                    "lat": round(lat, 3),
+                    "lon": round(float(lons[j]), 3),
+                    "u": round(u_val, 3),
+                    "v": round(v_val, 3),
+                    "speed": round(speed, 3),
+                    "knots": round(speed * 1.94384, 2),
+                    "heading": round(heading, 1),
+                })
+
+    return {
+        "month": month,
+        "stride": stride,
+        "count": len(vectors),
+        "vectors": vectors,
+    }
+
+
+
 @app.get("/api/telemetry/transect")
 def transect_telemetry(
     lat1: float = Query(..., ge=-60.0, le=40.0),

@@ -1,6 +1,6 @@
-import { Line, OrbitControls, Stars } from '@react-three/drei'
+import { Html, Line, OrbitControls, Stars } from '@react-three/drei'
 import { Canvas, useFrame, useLoader, useThree, type ThreeEvent } from '@react-three/fiber'
-import { Suspense, useEffect, useMemo, useRef } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
   GLOBE_RADIUS,
@@ -9,181 +9,396 @@ import {
   isPointInIndianOcean,
   latLngToVector3,
   vector3ToLatLng,
+  computeSphericalTangent,
+  CURRENT_SYSTEMS,
+  TSUNAMI_HISTORIC_DATA,
 } from './oceanDataEngine'
-import type { Instrument, OceanVariable, Selection, ViewMode } from './types'
+import type {
+  CoastalStation,
+  CurrentSystem,
+  Instrument,
+  OceanVariable,
+  Selection,
+  TsunamiScenario,
+  ViewMode,
+} from './types'
+import OceanCurrentFlow from './OceanCurrentFlow'
 
 const RADIUS = GLOBE_RADIUS
 const EARTH_DAY_MAP = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'
 const EARTH_WATER_MASK = 'https://threejs.org/examples/textures/planets/earth_specular_2048.jpg'
 
-interface FlowParticle {
-  lat: number
-  lon: number
-  age: number
-  maxAge: number
-  speedMult: number
-}
+/**
+ * Creates a merged cylinder shaft + cone arrowhead BufferGeometry for 3D vector arrows.
+ */
+function createArrowGeometry(): THREE.BufferGeometry {
+  const geom = new THREE.BufferGeometry()
+  const shaftLength = 0.038
+  const shaftRadius = 0.002
+  const headLength = 0.02
+  const headRadius = 0.0065
+  const segs = 6
 
-function spawnParticle(initial: boolean): FlowParticle {
-  // Distribute across major current systems
-  const region = Math.random()
-  let lat = 0
-  let lon = 75
+  const positions: number[] = []
+  const normals: number[] = []
 
-  if (region < 0.22) {
-    // Somali Jet & Western Arabian Sea
-    lat = -2 + Math.random() * 16
-    lon = 45 + Math.random() * 12
-  } else if (region < 0.44) {
-    // South Equatorial Current (SEC)
-    lat = -20 + Math.random() * 10
-    lon = 50 + Math.random() * 60
-  } else if (region < 0.60) {
-    // Agulhas Current (Mozambique/South Africa)
-    lat = -34 + Math.random() * 14
-    lon = 30 + Math.random() * 14
-  } else if (region < 0.74) {
-    // Equatorial Wyrtki Jet
-    lat = -3 + Math.random() * 6
-    lon = 60 + Math.random() * 34
-  } else if (region < 0.88) {
-    // Bay of Bengal Gyre
-    lat = 8 + Math.random() * 13
-    lon = 82 + Math.random() * 10
-  } else {
-    // Antarctic Circumpolar Current
-    lat = -43 + Math.random() * 4
-    lon = 35 + Math.random() * 75
+  for (let i = 0; i < segs; i++) {
+    const a0 = (i / segs) * Math.PI * 2
+    const a1 = ((i + 1) / segs) * Math.PI * 2
+    const c0 = Math.cos(a0), s0 = Math.sin(a0)
+    const c1 = Math.cos(a1), s1 = Math.sin(a1)
+
+    // Shaft cylinder quad: (b0, b1, t0) and (b1, t1, t0)
+    const b0 = [c0 * shaftRadius, 0, s0 * shaftRadius]
+    const b1 = [c1 * shaftRadius, 0, s1 * shaftRadius]
+    const t0 = [c0 * shaftRadius, shaftLength, s0 * shaftRadius]
+    const t1 = [c1 * shaftRadius, shaftLength, s1 * shaftRadius]
+
+    positions.push(...b0, ...b1, ...t0)
+    positions.push(...b1, ...t1, ...t0)
+    normals.push(c0, 0, s0, c1, 0, s1, c0, 0, s0)
+    normals.push(c1, 0, s1, c1, 0, s1, c0, 0, s0)
+
+    // Cone arrowhead segment: base ring to tip
+    const tip = [0, shaftLength + headLength, 0]
+    const hb0 = [c0 * headRadius, shaftLength, s0 * headRadius]
+    const hb1 = [c1 * headRadius, shaftLength, s1 * headRadius]
+
+    positions.push(...hb0, ...hb1, ...tip)
+    normals.push(c0, 0.4, s0, c1, 0.4, s1, 0, 1, 0)
+
+    // Cone base cap
+    positions.push(0, shaftLength, 0, ...hb1, ...hb0)
+    normals.push(0, -1, 0, 0, -1, 0, 0, -1, 0)
   }
 
-  return {
-    lat,
-    lon,
-    age: initial ? Math.floor(Math.random() * 100) : 0,
-    maxAge: 70 + Math.floor(Math.random() * 80),
-    speedMult: 0.8 + Math.random() * 0.5,
-  }
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+  return geom
 }
 
 /**
- * Animated Geodesic Streamline Flow Particles.
- * Directly visualizes real Indian Ocean surface currents (u, v) rushing in real-time.
+ * 3D Instanced Directional Vector Arrow Field.
+ * Renders physical 3D arrows across the ocean surface pointing along spherical velocity tangents.
  */
-function StreamlineParticles({ active, timeIndex }: { active: boolean; timeIndex: number }) {
-  const count = 1800
-  const pointsRef = useRef<THREE.Points>(null)
-  const geomRef = useRef<THREE.BufferGeometry>(null)
+function CurrentsVectorField({
+  active,
+  timeIndex,
+  density = 4.2,
+}: {
+  active: boolean
+  timeIndex: number
+  density?: number
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null)
+  const arrowGeom = useMemo(() => createArrowGeometry(), [])
+  const dummy = useMemo(() => new THREE.Object3D(), [])
 
-  const particles = useMemo<FlowParticle[]>(() => {
-    const list: FlowParticle[] = []
-    for (let i = 0; i < count; i++) {
-      list.push(spawnParticle(true))
-    }
-    return list
-  }, [count])
-
-  const positions = useMemo(() => new Float32Array(count * 3), [count])
-  const colors = useMemo(() => new Float32Array(count * 3), [count])
-
-  useFrame((_, delta) => {
-    if (!pointsRef.current || !active) return
-    const dt = Math.min(delta, 0.05)
-
-    for (let i = 0; i < count; i++) {
-      const p = particles[i]
-      const vel = getOceanVelocity(p.lat, p.lon, timeIndex)
-
-      // Advect particle along velocity vector (u: east, v: north)
-      p.lat += vel.v * dt * 4.4 * p.speedMult
-      const cosLat = Math.max(0.2, Math.cos((p.lat * Math.PI) / 180))
-      p.lon += ((vel.u * dt * 4.4) / cosLat) * p.speedMult
-      p.age += 1
-
-      // Respawn when life expires or moves outside the ocean basin
-      if (
-        p.age > p.maxAge ||
-        p.lat < -44.5 ||
-        p.lat > 25.5 ||
-        p.lon < 22 ||
-        p.lon > 122 ||
-        isDryLand(p.lat, p.lon)
-      ) {
-        particles[i] = spawnParticle(false)
+  // Sample grid over Indian Ocean: lat -44 to 26, lon 24 to 118
+  const gridPoints = useMemo(() => {
+    const pts: { lat: number; lon: number }[] = []
+    for (let lat = -44; lat <= 26; lat += density) {
+      for (let lon = 26; lon <= 118; lon += density) {
+        if (!isDryLand(lat, lon)) {
+          pts.push({ lat, lon })
+        }
       }
+    }
+    return pts
+  }, [density])
 
-      // Project onto sphere surface
-      const pos = latLngToVector3(p.lat, p.lon, RADIUS + 0.016)
-      positions[i * 3] = pos.x
-      positions[i * 3 + 1] = pos.y
-      positions[i * 3 + 2] = pos.z
+  useEffect(() => {
+    if (!meshRef.current || !active) return
+    const mesh = meshRef.current
 
-      // Velocity-based dynamic luminescence
-      const speedNorm = Math.min(1.0, vel.speed / 1.4)
-      const lifeFrac = p.age / p.maxAge
-      const alpha = Math.sin(lifeFrac * Math.PI)
+    const color = new THREE.Color()
+    gridPoints.forEach((pt, i) => {
+      const vel = getOceanVelocity(pt.lat, pt.lon, timeIndex)
+      const tangent = computeSphericalTangent(pt.lat, pt.lon, vel.u, vel.v, RADIUS + 0.016)
 
-      if (speedNorm > 0.65) {
-        // Fast jet (Somali/Agulhas): Luminous yellow-gold
-        colors[i * 3] = 1.0 * alpha
-        colors[i * 3 + 1] = 0.95 * alpha
-        colors[i * 3 + 2] = 0.25 * alpha
-      } else if (speedNorm > 0.35) {
-        // Moderate current (SEC, Equatorial Jet): Brilliant electric cyan
-        colors[i * 3] = 0.15 * alpha
-        colors[i * 3 + 1] = 0.92 * alpha
-        colors[i * 3 + 2] = 1.0 * alpha
+      dummy.position.copy(tangent.position)
+      dummy.quaternion.copy(tangent.quaternion)
+
+      // Scale arrow length based on speed
+      const speed = Math.max(0.06, vel.speed)
+      const scaleLen = THREE.MathUtils.clamp(speed * 1.6, 0.5, 2.3)
+      const scaleThick = THREE.MathUtils.clamp(0.7 + speed * 0.45, 0.6, 1.4)
+      dummy.scale.set(scaleThick, scaleLen, scaleThick)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+
+      // Scientific colormap (cmocean speed style)
+      if (speed > 1.2) {
+        color.set('#ff3d00') // Fast boundary jets: intense coral/vermilion
+      } else if (speed > 0.7) {
+        color.set('#ffd600') // Moderate-fast: bright gold
+      } else if (speed > 0.35) {
+        color.set('#00e676') // Moderate: vibrant emerald
       } else {
-        // Slow circulation: Aquamarine / soft blue
-        colors[i * 3] = 0.25 * alpha
-        colors[i * 3 + 1] = 0.7 * alpha
-        colors[i * 3 + 2] = 0.95 * alpha
+        color.set('#00b0ff') // Slow circulation: cyan
       }
-    }
+      mesh.setColorAt(i, color)
+    })
 
-    if (geomRef.current) {
-      geomRef.current.attributes.position.needsUpdate = true
-      geomRef.current.attributes.color.needsUpdate = true
-    }
-  })
+    mesh.instanceMatrix.needsUpdate = true
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+  }, [active, timeIndex, gridPoints, dummy])
 
   if (!active) return null
 
   return (
-    <points ref={pointsRef}>
-      <bufferGeometry ref={geomRef}>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        <bufferAttribute attach="attributes-color" args={[colors, 3]} />
-      </bufferGeometry>
-      <pointsMaterial
-        vertexColors
-        size={0.015}
-        sizeAttenuation
+    <instancedMesh
+      ref={meshRef}
+      args={[arrowGeom, undefined, gridPoints.length]}
+    >
+      <meshStandardMaterial
+        roughness={0.35}
+        metalness={0.15}
         transparent
-        opacity={0.92}
-        blending={THREE.AdditiveBlending}
-        depthWrite={false}
+        opacity={0.94}
       />
-    </points>
+    </instancedMesh>
+  )
+}
+
+/**
+ * Dynamic Multi-Scenario Tsunami Propagation Layer.
+ * Renders the extended fault rupture arc (1,300 km Sunda Trench),
+ * authentic irregular bathymetric isochrone contours,
+ * epicenter seismic beacons, and coastal tide gauge impacts.
+ */
+interface BathymetricContour {
+  hour: number
+  id: string
+  coordinates: [number, number][]
+}
+
+let isochroneDataCache: Record<string, BathymetricContour[]> | null = null
+
+function TsunamiPropagationLayer({
+  active,
+  scenario = TSUNAMI_HISTORIC_DATA,
+  tsunamiHour = 2.0,
+  showIsochrones = true,
+  onSelectStation,
+}: {
+  active: boolean
+  scenario?: TsunamiScenario
+  tsunamiHour?: number
+  showIsochrones?: boolean
+  onSelectStation?: (station: CoastalStation) => void
+}) {
+  const epic = scenario.epicenter
+  const epicPos = useMemo(
+    () => latLngToVector3(epic.latitude, epic.longitude, RADIUS + 0.015),
+    [epic.latitude, epic.longitude]
+  )
+
+  // Epicenter pulsing beacon animation
+  const pulseRing1 = useRef<THREE.Mesh>(null)
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime() * 2.0
+    if (pulseRing1.current) {
+      const p = t % 1
+      pulseRing1.current.scale.setScalar(0.6 + p * 1.4)
+      ;(pulseRing1.current.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (1 - p) * 0.75)
+    }
+  })
+
+  // 1. Extended Fault Rupture Arc / Zone (1,300 km Subduction Trench)
+  const rupturePoints = useMemo(() => {
+    return scenario.rupture_arc.map((pt) =>
+      latLngToVector3(pt.lat, pt.lon, RADIUS + 0.02)
+    )
+  }, [scenario.rupture_arc])
+
+  // Subduction zone fault segment markers along the plate boundary
+  const ruptureMarkers = useMemo(() => {
+    return scenario.rupture_arc.map((pt) => ({
+      name: pt.name,
+      pos: latLngToVector3(pt.lat, pt.lon, RADIUS + 0.022),
+    }))
+  }, [scenario.rupture_arc])
+
+  // 2. Authentic Irregular Travel-Time Contours (Isochrones) Derived from Bathymetry
+  const [contours, setContours] = useState<Record<string, BathymetricContour[]>>(
+    isochroneDataCache || {}
+  )
+
+  useEffect(() => {
+    if (isochroneDataCache) return
+    fetch('/data/tsunami_bathymetric_isochrones.json')
+      .then((res) => res.json())
+      .then((data) => {
+        isochroneDataCache = data
+        setContours(data)
+      })
+      .catch((err) => console.warn('Could not load bathymetric isochrones:', err))
+  }, [])
+
+  const scenarioContours = useMemo(() => {
+    const list: BathymetricContour[] = contours[scenario.id] || []
+    return list.map((seg: BathymetricContour) => ({
+      id: seg.id,
+      hour: seg.hour,
+      points: seg.coordinates.map(([lat, lon]: [number, number]) =>
+        latLngToVector3(lat, lon, RADIUS + 0.016)
+      ),
+    }))
+  }, [contours, scenario.id])
+
+  // 3. Satellite Altimeter Track (e.g. Jason-1 for Sumatra 2004)
+  const satTrackPoints = useMemo(() => {
+    if (!scenario.satellite_pass) return null
+    const pts: THREE.Vector3[] = []
+    const sp = scenario.satellite_pass
+    for (let lat = sp.lat_start; lat <= sp.lat_end; lat += 0.5) {
+      pts.push(latLngToVector3(lat, sp.lon, RADIUS + 0.024))
+    }
+    return pts
+  }, [scenario.satellite_pass])
+
+  if (!active) return null
+
+  return (
+    <group>
+      {/* 1. Epicenter Seismic Pinpoint Beacon */}
+      <group position={epicPos}>
+        <mesh>
+          <sphereGeometry args={[0.022, 20, 20]} />
+          <meshBasicMaterial color="#00e5ff" />
+        </mesh>
+        <mesh ref={pulseRing1}>
+          <ringGeometry args={[0.014, 0.028, 32]} />
+          <meshBasicMaterial color="#00e5ff" transparent opacity={0.7} side={THREE.DoubleSide} />
+        </mesh>
+      </group>
+
+      {/* Upright Beacon Needle */}
+      <Line
+        points={[epicPos, epicPos.clone().multiplyScalar(1.05)]}
+        color="#00e5ff"
+        lineWidth={2.2}
+      />
+
+      {/* 2. Extended Fault Rupture Arc (1,300 km Subduction Trench) */}
+      {rupturePoints.length >= 2 && (
+        <Line
+          points={rupturePoints}
+          color="#00f5ff"
+          lineWidth={3.2}
+          transparent
+          opacity={0.92}
+        />
+      )}
+
+      {/* Subduction Zone Rupture Node Markers */}
+      {ruptureMarkers.map((rm, idx) => (
+        <mesh key={idx} position={rm.pos}>
+          <sphereGeometry args={[0.01, 12, 12]} />
+          <meshBasicMaterial color="#00f5ff" />
+        </mesh>
+      ))}
+
+      {/* 3. Authentic Irregular Bathymetric Isochrone Contours (Optional Scientific Layer) */}
+      {showIsochrones &&
+        scenarioContours.map((iso) => (
+          <Line
+            key={iso.id}
+            points={iso.points}
+            color="#00e5ff"
+            lineWidth={1.0}
+            transparent
+            opacity={0.28}
+          />
+        ))}
+
+      {/* 4. Scenario-Specific Coastal Tide Gauge Stations */}
+      {scenario.coastal_stations.map((st) => {
+        const isImpacted = tsunamiHour >= st.arrival_hours
+        const pos = latLngToVector3(st.lat, st.lon, RADIUS + 0.018)
+        const color = isImpacted ? '#ff1744' : '#00e5ff'
+
+        return (
+          <group
+            key={st.id}
+            position={pos}
+            onClick={(e) => {
+              e.stopPropagation()
+              onSelectStation?.(st)
+            }}
+          >
+            <mesh>
+              <sphereGeometry args={[isImpacted ? 0.022 : 0.015, 16, 16]} />
+              <meshBasicMaterial color={color} />
+            </mesh>
+            {isImpacted && (
+              <mesh scale={2.2}>
+                <sphereGeometry args={[0.022, 16, 16]} />
+                <meshBasicMaterial color="#ff1744" transparent opacity={0.28} />
+              </mesh>
+            )}
+          </group>
+        )
+      })}
+
+      {/* 5. Satellite Altimeter Pass (if present) */}
+      {satTrackPoints && satTrackPoints.length >= 2 && scenario.satellite_pass && (
+        <>
+          <Line
+            points={satTrackPoints}
+            color="#cddc39"
+            lineWidth={1.2}
+            dashed
+            dashScale={28}
+            dashSize={0.04}
+            gapSize={0.02}
+            transparent
+            opacity={0.65}
+          />
+          <group position={latLngToVector3(4.5, scenario.satellite_pass.lon, RADIUS + 0.028)}>
+            <mesh>
+              <octahedronGeometry args={[0.018, 0]} />
+              <meshBasicMaterial color="#cddc39" />
+            </mesh>
+          </group>
+        </>
+      )}
+    </group>
   )
 }
 
 /**
  * Oceanographic Multi-Theme Shader.
- * Integrates cmocean thermal, haline (with isohaline fronts), alga (with organic blooms),
- * and speed (with directional wave advection).
+ * Integrates cmocean thermal, haline, alga, and speed.
  */
 function OceanShader({
   variable,
   depth,
   timeIndex,
   overlayStrength,
+  tsunamiActive = false,
+  tsunamiScenario = TSUNAMI_HISTORIC_DATA,
+  tsunamiHour = 2.0,
 }: {
   variable: OceanVariable
   depth: number
   timeIndex: number
   overlayStrength: number
+  tsunamiActive?: boolean
+  tsunamiScenario?: TsunamiScenario
+  tsunamiHour?: number
 }) {
-  const [earthMap, waterMask] = useLoader(THREE.TextureLoader, [EARTH_DAY_MAP, EARTH_WATER_MASK])
+  const [earthMap, waterMask, texSumatra, texMakran, texWharton] = useLoader(
+    THREE.TextureLoader,
+    [
+      EARTH_DAY_MAP,
+      EARTH_WATER_MASK,
+      '/data/tsunami_travel_time_2004_sumatra.png',
+      '/data/tsunami_travel_time_1945_makran.png',
+      '/data/tsunami_travel_time_2012_wharton.png',
+    ]
+  )
   earthMap.colorSpace = THREE.SRGBColorSpace
 
   const material = useMemo(
@@ -199,6 +414,9 @@ function OceanShader({
           uOverlayStrength: { value: overlayStrength },
           uEarthMap: { value: earthMap },
           uWaterMask: { value: waterMask },
+          uTsunamiActive: { value: tsunamiActive ? 1.0 : 0.0 },
+          uTsunamiHour: { value: tsunamiHour },
+          uTsunamiPropMap: { value: texSumatra },
         },
         vertexShader: `
           varying vec2 vUv;
@@ -218,6 +436,9 @@ function OceanShader({
           uniform float uOverlayStrength;
           uniform sampler2D uEarthMap;
           uniform sampler2D uWaterMask;
+          uniform float uTsunamiActive;
+          uniform float uTsunamiHour;
+          uniform sampler2D uTsunamiPropMap;
           varying vec2 vUv;
           varying vec3 vNormal;
           varying vec3 vPosition;
@@ -241,15 +462,15 @@ function OceanShader({
             return mix(c6, c7, (t - 0.90) / 0.10);
           }
 
-          // 2. Salinity: cmocean haline with Bengal River plume vs Arabian Evaporative basin
+          // 2. Salinity: cmocean haline
           vec3 paletteHaline(float t) {
-            vec3 c0 = vec3(0.13, 0.0, 0.29);   // Deep violet (<31 PSU, river plume)
-            vec3 c1 = vec3(0.24, 0.12, 0.6);   // Sapphire violet
-            vec3 c2 = vec3(0.12, 0.35, 0.82);  // Cobalt blue
-            vec3 c3 = vec3(0.0, 0.68, 0.76);   // Oceanic cyan (34-35 PSU)
-            vec3 c4 = vec3(0.38, 0.85, 0.58);  // Sea green
-            vec3 c5 = vec3(0.88, 0.88, 0.22);  // Luminous amber-lime (36.5 PSU)
-            vec3 c6 = vec3(1.0, 0.72, 0.12);   // Brilliant gold-topaz (>38 PSU, Red Sea/Arabian)
+            vec3 c0 = vec3(0.13, 0.0, 0.29);
+            vec3 c1 = vec3(0.24, 0.12, 0.6);
+            vec3 c2 = vec3(0.12, 0.35, 0.82);
+            vec3 c3 = vec3(0.0, 0.68, 0.76);
+            vec3 c4 = vec3(0.38, 0.85, 0.58);
+            vec3 c5 = vec3(0.88, 0.88, 0.22);
+            vec3 c6 = vec3(1.0, 0.72, 0.12);
             if (t < 0.16) return mix(c0, c1, t / 0.16);
             if (t < 0.32) return mix(c1, c2, (t - 0.16) / 0.16);
             if (t < 0.48) return mix(c2, c3, (t - 0.32) / 0.16);
@@ -260,13 +481,13 @@ function OceanShader({
 
           // 3. Chlorophyll: NASA MODIS Ocean Color / cmocean alga
           vec3 paletteAlga(float t) {
-            vec3 c0 = vec3(0.01, 0.05, 0.11);  // Oligotrophic desert (deep indigo navy)
-            vec3 c1 = vec3(0.02, 0.18, 0.18);  // Low productivity cyan-navy
-            vec3 c2 = vec3(0.06, 0.38, 0.22);  // Moderate oceanic green
-            vec3 c3 = vec3(0.15, 0.62, 0.28);  // Productive emerald
-            vec3 c4 = vec3(0.38, 0.85, 0.32);  // Rich vibrant green
-            vec3 c5 = vec3(0.72, 0.94, 0.36);  // Luminous chartreuse bloom
-            vec3 c6 = vec3(1.0, 0.96, 0.42);   // Golden biological peak
+            vec3 c0 = vec3(0.01, 0.05, 0.11);
+            vec3 c1 = vec3(0.02, 0.18, 0.18);
+            vec3 c2 = vec3(0.06, 0.38, 0.22);
+            vec3 c3 = vec3(0.15, 0.62, 0.28);
+            vec3 c4 = vec3(0.38, 0.85, 0.32);
+            vec3 c5 = vec3(0.72, 0.94, 0.36);
+            vec3 c6 = vec3(1.0, 0.96, 0.42);
             if (t < 0.16) return mix(c0, c1, t / 0.16);
             if (t < 0.32) return mix(c1, c2, (t - 0.16) / 0.16);
             if (t < 0.48) return mix(c2, c3, (t - 0.32) / 0.16);
@@ -275,7 +496,7 @@ function OceanShader({
             return mix(c5, c6, (t - 0.84) / 0.16);
           }
 
-          // 4. Currents: cmocean speed with directional flow wave advection
+          // 4. Currents: cmocean speed
           vec3 paletteSpeed(float t) {
             vec3 c0 = vec3(0.03, 0.08, 0.18);
             vec3 c1 = vec3(0.08, 0.22, 0.45);
@@ -296,53 +517,138 @@ function OceanShader({
             vec3 earth = texture2D(uEarthMap, vUv).rgb;
             float water = smoothstep(0.18, 0.46, texture2D(uWaterMask, vUv).r);
 
-            // Geographic metrics
+            // ==========================================================
+            // PHYSICAL BATHYMETRY-DRIVEN TSUNAMI PROPAGATION (INDIAN OCEAN)
+            // Driven by actual ETOPO depth wave speeds c = sqrt(g * H)
+            // and 1,300 km extended fault rupture directivity
+            // ==========================================================
+            if (uTsunamiActive > 0.5) {
+              vec3 p = normalize(vPosition);
+
+              // Geographical coordinates of surface fragment
+              float latDeg = asin(clamp(p.y, -1.0, 1.0)) * 57.29578;
+              float lonDeg = atan(p.z, -p.x) * 57.29578 - 180.0;
+              if (lonDeg < -180.0) lonDeg += 360.0;
+
+              // Main sun lighting vector
+              vec3 sunDir = normalize(vec3(0.35, 0.82, -1.0));
+              float sunLight = max(dot(vNormal, sunDir), 0.0);
+
+              // Bright, warm natural land - never dull or shaded
+              vec3 litLand = earth * (1.18 + sunLight * 0.42);
+
+              // Rich, realistic natural ocean base - dark underneath
+              vec3 oceanTint = vec3(0.012, 0.09, 0.25);
+              vec3 litOcean = mix(earth * 1.15, oceanTint, 0.32) * (1.02 + sunLight * 0.36);
+
+              // Indian Ocean bathymetry grid bounds
+              bool inBasin = (latDeg >= -44.99 && latDeg <= 32.00 && lonDeg >= 20.00 && lonDeg <= 125.00);
+
+              if (inBasin && water > 0.12) {
+                float u = clamp((lonDeg - 20.008333) / (125.008333 - 20.008333), 0.0, 1.0);
+                float v = clamp((latDeg - (-44.991667)) / (32.008333 - (-44.991667)), 0.0, 1.0);
+
+                vec4 propData = texture2D(uTsunamiPropMap, vec2(u, v));
+                float tArr = propData.r * 16.0; // Arrival time in hours
+                float dirSpread = propData.g;  // Directivity * spreading factor
+                float depthNorm = propData.b;  // Normalized ocean depth
+                float isOceanWater = propData.a;
+
+                if (isOceanWater > 0.4 && tArr > 0.02 && tArr < 15.5) {
+                  float dt = uTsunamiHour - tArr;
+
+                  // Wave packet passes locally from dt = -0.04h to dt = 1.8h
+                  if (dt >= -0.04 && dt <= 1.8) {
+                    // 1. Steep physical leading wavefront surge (continuous fluid crest)
+                    float leadSurge = exp(-pow(max(0.0, dt) / 0.08, 2.0));
+
+                    // 2. Subtle micro-scale sea-surface variation (restrained, never substituting for physics)
+                    float subtleVar = sin(p.x * 20.0 + p.y * 18.0 + uTime * 1.6) * 0.2;
+
+                    // 3. Continuous flowing wave train behind the leading front (multiple fluid wave bands)
+                    float primaryBands = sin(dt * 20.0 - uTime * 2.2 + subtleVar) * 0.5 + 0.5;
+                    float secondaryHarmonic = sin(dt * 40.0 - uTime * 3.6) * 0.22;
+                    float waveTrain = clamp(primaryBands + secondaryHarmonic, 0.0, 1.0);
+                    float packetDecay = exp(-max(0.0, dt) / 0.62);
+
+                    // 4. Energy attenuation and lifecycle dissipation across the basin
+                    float lifeDecay = clamp(1.0 - (uTsunamiHour - 0.4) / 10.8, 0.0, 1.0);
+                    float energy = dirSpread * lifeDecay;
+
+                    // Physical wave surface elevation
+                    float waveElevation = (leadSurge * 1.15 + waveTrain * packetDecay * 0.72) * energy;
+                    waveElevation = clamp(waveElevation, 0.0, 1.0);
+
+                    // Restrained scientific oceanographic palette:
+                    // Deep Oceanic Indigo (Trough)
+                    vec3 troughColor = vec3(0.012, 0.065, 0.22);
+                    // Rich Marine Azure (Swell flank)
+                    vec3 swellColor = vec3(0.00, 0.44, 0.88);
+                    // Luminous Electric Cyan (Wave crest)
+                    vec3 crestColor = vec3(0.05, 0.86, 0.98);
+                    // Restrained Pale Sky-White (Sea-spray crest highlight)
+                    vec3 highlightColor = vec3(0.92, 0.98, 1.0);
+
+                    vec3 waveColor;
+                    if (waveElevation < 0.38) {
+                      waveColor = mix(troughColor, swellColor, waveElevation / 0.38);
+                    } else if (waveElevation < 0.76) {
+                      waveColor = mix(swellColor, crestColor, (waveElevation - 0.38) / 0.38);
+                    } else {
+                      waveColor = mix(crestColor, highlightColor, (waveElevation - 0.76) / 0.24);
+                    }
+
+                    // Specular sunlight reflection along wave crests
+                    vec3 viewDir = normalize(vec3(0.0, 0.0, -1.0));
+                    vec3 halfVec = normalize(sunDir + viewDir);
+                    float spec = pow(max(dot(vNormal, halfVec), 0.0), 30.0) * waveElevation * energy * 0.42;
+
+                    vec3 litWaveSurface = waveColor * (1.02 + sunLight * 0.38) + vec3(spec);
+
+                    // Smoothly blend onto the dark natural ocean underneath
+                    float blendAlpha = smoothstep(0.02, 0.45, waveElevation) * energy;
+                    litOcean = mix(litOcean, litWaveSurface, blendAlpha * 0.94);
+                  }
+                }
+              }
+
+              gl_FragColor = vec4(mix(litLand, litOcean, water), 1.0);
+              return;
+            }
+
             float latFromEq = abs(vUv.y - 0.5) * 2.0;
             float tropicality = pow(max(0.0, cos(latFromEq * 1.5708)), 1.3);
-            float lonPhase = vUv.x * 6.2831;
-
-            // Physical thermocline dropoff
             float thermocline = 1.0 - exp(-uDepth / (200.0 + tropicality * 140.0));
 
             vec3 fieldColor = vec3(0.0);
 
             if (uVariable < 0.5) {
-              // TEMPERATURE (cmocean thermal): warm pool in east, cooler upwelling in west, thermocline at depth
               float wave = sin(vPosition.x * 4.0 + uTime * 0.4) * 0.04;
               float normVal = clamp(0.1 + tropicality * 0.88 - thermocline * 0.76 + wave, 0.0, 1.0);
               fieldColor = paletteThermal(normVal);
             }
             else if (uVariable < 1.5) {
-              // SALINITY (cmocean haline):
-              // High salinity in Arabian Sea / Persian Gulf (lon < 0.55), low in Bay of Bengal (lon > 0.55)
               float regionalEvap = (0.5 - vUv.x) * 1.8;
               float gyre = sin(latFromEq * 3.1416);
               float baseSal = clamp(0.32 + gyre * 0.42 + regionalEvap * 0.28 + thermocline * 0.1, 0.0, 1.0);
-
-              // Isohaline contour ridges (delicate contour lines showing density fronts)
               float isohaline = abs(fract(baseSal * 10.0) - 0.5);
               float contour = smoothstep(0.44, 0.48, isohaline) * 0.15;
-
               fieldColor = paletteHaline(baseSal) + vec3(contour * 0.6, contour * 0.8, contour);
             }
             else if (uVariable < 2.5) {
-              // CHLOROPHYLL (NASA MODIS alga):
-              // Coastal bloom filaments and Southern Ocean front vs oligotrophic subtropical gyre
               float coastProximity = smoothstep(0.42, 0.49, texture2D(uWaterMask, vUv).r);
               float bloomFilament = sin(vPosition.x * 18.0 + sin(vPosition.y * 14.0 + uTime * 0.5) * 3.0) * 0.5 + 0.5;
               float southernFront = smoothstep(0.65, 0.95, vUv.y);
-
               float chlVal = clamp(0.04 + (1.0 - coastProximity) * 0.65 + bloomFilament * 0.28 + southernFront * 0.45 - thermocline * 0.25, 0.0, 1.0);
               fieldColor = paletteAlga(chlVal);
             }
             else {
-              // CURRENTS (cmocean speed):
-              // Flow advection wavelets traveling in direction of ocean currents
-              float flowDirX = sin(vUv.y * 6.28);
-              float flowDirY = cos(vUv.x * 6.28);
-              float advection = sin(vPosition.x * 35.0 + vPosition.y * 25.0 - uTime * 3.8) * 0.5 + 0.5;
-              float jetSpeed = clamp(0.22 + exp(-pow(latFromEq / 0.25, 2.0)) * 0.55 + advection * 0.22, 0.0, 1.0);
-              fieldColor = paletteSpeed(jetSpeed) * (0.85 + advection * 0.35);
+              // CURRENTS BASE OCEAN:
+              // Clean, sleek, dark semi-transparent ocean surface with subtle ambient flow kinetic energy.
+              // Streamlines (Layer 2) and Luminous Particles (Layer 3) render cleanly on top.
+              float kineticCore = exp(-pow(latFromEq / 0.28, 2.0)) * 0.32;
+              float flowGlow = clamp(0.08 + kineticCore, 0.0, 1.0);
+              fieldColor = paletteSpeed(flowGlow) * 0.55;
             }
 
             // GLOBAL OCEAN COVERAGE: All oceans (Pacific, Atlantic, Southern, Arctic, Indian)
@@ -373,10 +679,22 @@ function OceanShader({
     [variable, earthMap, waterMask, overlayStrength]
   )
 
-  material.uniforms.uTime.value = timeIndex * 0.8
+  useFrame(({ clock }) => {
+    material.uniforms.uTime.value = clock.getElapsedTime()
+    const activePropMap =
+      tsunamiScenario.id === '1945_makran'
+        ? texMakran
+        : tsunamiScenario.id === '2012_wharton'
+        ? texWharton
+        : texSumatra
+    material.uniforms.uTsunamiPropMap.value = activePropMap
+  })
+
   material.uniforms.uDepth.value = depth
   material.uniforms.uVariable.value = ['temperature', 'salinity', 'chlorophyll', 'currents'].indexOf(variable)
   material.uniforms.uOverlayStrength.value = overlayStrength
+  material.uniforms.uTsunamiActive.value = tsunamiActive ? 1.0 : 0.0
+  material.uniforms.uTsunamiHour.value = tsunamiHour
 
   return (
     <mesh material={material}>
@@ -384,6 +702,7 @@ function OceanShader({
     </mesh>
   )
 }
+
 
 function Atmosphere() {
   return (
@@ -528,9 +847,6 @@ function Marker({
   )
 }
 
-/**
- * Animated Holographic Sonar Beacon.
- */
 function HolographicBeacon({ selection }: { selection: Selection }) {
   const isSector = isPointInIndianOcean(selection.latitude, selection.longitude)
   const localPos = useMemo(
@@ -593,36 +909,65 @@ function HolographicBeacon({ selection }: { selection: Selection }) {
   )
 }
 
-/**
- * Click-to-Teleport and Smooth Camera Lerp Controller.
- */
 function CameraDirector({
   targetPoint,
   teleportNonce,
   globeGroupRef,
   mode,
   depth,
+  tsunamiScenario,
 }: {
   targetPoint: Selection
   teleportNonce?: number
   globeGroupRef: React.RefObject<THREE.Group | null>
   mode: ViewMode
   depth: number
+  tsunamiScenario?: TsunamiScenario
 }) {
   const { camera } = useThree()
   const isTeleporting = useRef(false)
   const targetCamPos = useRef<THREE.Vector3 | null>(null)
   const lastNonce = useRef(teleportNonce)
+  const lastScenarioId = useRef(tsunamiScenario?.id)
+  const lastMode = useRef(mode)
 
+  // 1. Teleport when targetPoint / teleportNonce is triggered
   useEffect(() => {
     if (teleportNonce !== undefined && teleportNonce !== lastNonce.current && globeGroupRef.current) {
       lastNonce.current = teleportNonce
       const localVec = latLngToVector3(targetPoint.latitude, targetPoint.longitude, RADIUS)
       const worldVec = localVec.clone().applyMatrix4(globeGroupRef.current.matrixWorld)
-      targetCamPos.current = worldVec.clone().normalize().multiplyScalar(2.65)
+      // When a specific station or coordinate is clicked, zoom to 2.8; else frame Indian Ocean basin at 4.4
+      const isEpicenterTarget =
+        tsunamiScenario &&
+        Math.abs(targetPoint.latitude - tsunamiScenario.epicenter.latitude) < 0.5 &&
+        Math.abs(targetPoint.longitude - tsunamiScenario.epicenter.longitude) < 0.5
+
+      const dist = mode === 'tsunami' && !isEpicenterTarget ? 2.8 : 4.4
+      targetCamPos.current = worldVec.clone().normalize().multiplyScalar(dist)
       isTeleporting.current = true
     }
-  }, [teleportNonce, targetPoint, globeGroupRef])
+  }, [teleportNonce, targetPoint, globeGroupRef, mode, tsunamiScenario])
+
+  // 2. Smoothly frame Indian Ocean upon entering Tsunami or Currents mode
+  useEffect(() => {
+    if (mode === 'tsunami' && (lastMode.current !== 'tsunami' || lastScenarioId.current !== tsunamiScenario?.id)) {
+      lastMode.current = mode
+      lastScenarioId.current = tsunamiScenario?.id
+      if (tsunamiScenario) {
+        const epicVec = latLngToVector3(tsunamiScenario.epicenter.latitude, tsunamiScenario.epicenter.longitude, RADIUS)
+        targetCamPos.current = epicVec.clone().normalize().multiplyScalar(4.4)
+        isTeleporting.current = true
+      }
+    } else if (mode === 'currents' && lastMode.current !== 'currents') {
+      lastMode.current = mode
+      const centerVec = latLngToVector3(3.0, 66.0, RADIUS)
+      targetCamPos.current = centerVec.clone().normalize().multiplyScalar(4.4)
+      isTeleporting.current = true
+    } else {
+      lastMode.current = mode
+    }
+  }, [mode, tsunamiScenario])
 
   useFrame((_, delta) => {
     if (mode === 'dive') {
@@ -633,7 +978,7 @@ function CameraDirector({
     }
 
     if (isTeleporting.current && targetCamPos.current) {
-      const factor = Math.min(1, delta * 4.0)
+      const factor = Math.min(1, delta * 3.6)
       camera.position.lerp(targetCamPos.current, factor)
       camera.lookAt(0, 0, 0)
       if (camera.position.distanceTo(targetCamPos.current) < 0.02) {
@@ -654,8 +999,20 @@ export interface GlobeSceneProps {
   instruments: Instrument[]
   selection: Selection
   teleportNonce?: number
+  showVectorArrows?: boolean
+  showCurrentLabels?: boolean
+  showStreamlines?: boolean
+  showParticles?: boolean
+  flowIntensity?: number
+  flowSpeed?: number
+  showIsochrones?: boolean
+  tsunamiHour?: number
+  selectedStation?: CoastalStation | null
+  tsunamiScenario?: TsunamiScenario
   onInstrument: (instrument: Instrument) => void
   onSelectPoint: (selection: Selection) => void
+  onSelectStation?: (station: CoastalStation) => void
+  onSelectCurrentSystem?: (sys: CurrentSystem) => void
 }
 
 function IndianOceanSectorBoundary() {
@@ -704,8 +1061,19 @@ function Scene({
   instruments,
   selection,
   teleportNonce,
+  showVectorArrows = false,
+  showCurrentLabels = true,
+  showStreamlines = true,
+  showParticles = true,
+  flowIntensity = 1.0,
+  flowSpeed = 1.0,
+  showIsochrones = true,
+  tsunamiHour = 2.0,
+  tsunamiScenario = TSUNAMI_HISTORIC_DATA,
   onInstrument,
   onSelectPoint,
+  onSelectStation,
+  onSelectCurrentSystem,
 }: GlobeSceneProps) {
   const groupRef = useRef<THREE.Group>(null)
 
@@ -717,20 +1085,33 @@ function Scene({
     onSelectPoint(coord)
   }
 
+  // Strict mode isolation: when in Tsunami mode, NEVER render currents layers
+  const isTsunamiActive = mode === 'tsunami'
+  const isCurrentsActive = !isTsunamiActive && (mode === 'currents' || variable === 'currents')
+
   return (
     <>
       <color attach="background" args={['#020712']} />
       <fog attach="fog" args={['#020712', 8, 18]} />
-      <ambientLight intensity={0.8} />
-      <directionalLight position={[5, 4, 5]} intensity={2.3} color="#a5d8ff" />
-      <pointLight position={[-5, -1, -3]} intensity={1.2} color="#1f70ff" />
+      <ambientLight intensity={1.3} />
+      <directionalLight position={[1.8, 3.8, -4.6]} intensity={2.8} color="#ffffff" />
+      <directionalLight position={[-3.8, 1.8, -3.6]} intensity={1.4} color="#b3e5fc" />
+      <pointLight position={[0, -4, -3]} intensity={0.9} color="#00e5ff" />
       <Stars radius={90} depth={45} count={3200} factor={3} saturation={0} fade speed={0.25} />
 
       <group
         ref={groupRef}
-        rotation={[THREE.MathUtils.degToRad(-6), THREE.MathUtils.degToRad(-62), THREE.MathUtils.degToRad(11)]}
+        rotation={[0, 0, 0]}
       >
-        <OceanShader variable={variable} depth={depth} timeIndex={timeIndex} overlayStrength={overlayStrength} />
+        <OceanShader
+          variable={isTsunamiActive ? 'temperature' : (mode === 'currents' ? 'currents' : variable)}
+          depth={depth}
+          timeIndex={timeIndex}
+          overlayStrength={isTsunamiActive ? 0.35 : overlayStrength}
+          tsunamiActive={isTsunamiActive}
+          tsunamiScenario={tsunamiScenario}
+          tsunamiHour={tsunamiHour}
+        />
 
         {/* Invisible raycast sphere */}
         <mesh onClick={handleGlobeClick}>
@@ -753,17 +1134,41 @@ function Scene({
         {/* Indian Ocean Digital Twin Observation Boundary [20°E-125°E, 45°S-32°N] */}
         <IndianOceanSectorBoundary />
 
-        {/* Real Geodesic Streamline Flow Particles */}
-        <StreamlineParticles
-          active={variable === 'currents' || mode === 'dive'}
+        {/* Continuous Fluid Ocean Flow: Smooth Curved Streamlines & Luminous Advected Particles */}
+        <OceanCurrentFlow
+          active={isCurrentsActive || mode === 'dive'}
+          depth={depth}
           timeIndex={timeIndex}
+          showStreamlines={showStreamlines}
+          showParticles={showParticles}
+          flowIntensity={flowIntensity}
+          flowSpeed={flowSpeed}
         />
 
-        {instruments.map((instrument) => (
-          <Marker key={instrument.id} instrument={instrument} onSelect={onInstrument} />
-        ))}
+        {/* Optional 3D Vector Arrow Field (off by default) */}
+        {showVectorArrows && (
+          <CurrentsVectorField
+            active={isCurrentsActive && showVectorArrows}
+            timeIndex={timeIndex}
+          />
+        )}
 
-        {/* Holographic Sonar Beacon at clicked spot */}
+        {/* 4. Complete Multi-Scenario Indian Ocean Tsunami Propagation Scene */}
+        <TsunamiPropagationLayer
+          active={isTsunamiActive}
+          scenario={tsunamiScenario}
+          tsunamiHour={tsunamiHour}
+          showIsochrones={showIsochrones}
+          onSelectStation={onSelectStation}
+        />
+
+        {/* In-situ Observation Markers (Argo, BGC, Gliders) - Explore Mode Only */}
+        {!isTsunamiActive && mode === 'explore' &&
+          instruments.map((instrument) => (
+            <Marker key={instrument.id} instrument={instrument} onSelect={onInstrument} />
+          ))}
+
+        {/* Holographic Sonar Beacon at clicked coordinate */}
         <HolographicBeacon selection={selection} />
       </group>
 
@@ -775,12 +1180,13 @@ function Scene({
         globeGroupRef={groupRef}
         mode={mode}
         depth={depth}
+        tsunamiScenario={tsunamiScenario}
       />
 
       <OrbitControls
         enablePan={false}
-        minDistance={2.2}
-        maxDistance={8}
+        minDistance={1.8}
+        maxDistance={5.2}
         enableDamping
         dampingFactor={0.06}
         autoRotate={mode === 'explore' && !teleportNonce}
@@ -792,7 +1198,7 @@ function Scene({
 
 export default function GlobeScene(props: GlobeSceneProps) {
   return (
-    <Canvas camera={{ position: [4.1, 2.3, 4.8], fov: 38 }} dpr={[1, 2]} gl={{ antialias: true }}>
+    <Canvas camera={{ position: [0.65, 0.75, -4.4], fov: 38 }} dpr={[1, 2]} gl={{ antialias: true }}>
       <Suspense fallback={null}>
         <Scene {...props} />
       </Suspense>

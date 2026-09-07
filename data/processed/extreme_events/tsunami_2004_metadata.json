@@ -2,18 +2,24 @@
   "event_id": "tsunami_2004",
   "title": "2004 Great Indian Ocean Tsunami",
   "date": "2004-12-26",
+  "origin_time": "2004-12-26T00:58:53Z",
+  "magnitude": 9.1,
   "affected_regions": [
-    "Sumatra",
-    "Andaman & Nicobar",
-    "Tamil Nadu (Chennai)",
+    "Sumatra (Indonesia)",
+    "Andaman & Nicobar (India)",
+    "Tamil Nadu (India)",
     "Sri Lanka",
+    "Thailand",
     "Maldives",
+    "Seychelles",
     "Somalia"
   ],
   "epicenter": {
     "lat": 3.316,
     "lon": 95.854
   },
-  "physics": "Barotropic long-gravity wave propagation c = sqrt(g*H)",
-  "simulation_file": "data\\processed\\cubes\\tsunami_2004_hourly.json"
+  "fault_rupture_length_km": 1300,
+  "physics": "Barotropic long-gravity shallow water wave propagation c = sqrt(g*H)",
+  "coastal_stations_count": 21,
+  "simulation_file": "data/processed/cubes/tsunami_2004_hourly.json"
 }

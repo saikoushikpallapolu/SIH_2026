@@ -97,19 +97,78 @@ def build_tsunami_dataset():
         hourly_frames.append(step_meta)
         print(f" - Hour {hour:4.1f}: max crest = {step_meta['max_crest_m']:.2f}m, max current = {step_meta['max_velocity_mps']:.2f}m/s")
 
+    # Comprehensive Indian Ocean Coastal Tide Gauge & Runup Observation Stations
+    coastal_stations = [
+        {"id": "station_meulaboh", "name": "Meulaboh", "region": "Sumatra, Indonesia", "lat": 4.145, "lon": 96.128, "dist_km": 140, "arrival_hours": 0.25, "arrival_utc": "2004-12-26T01:14:00Z", "wave_height_m": 28.5, "status": "Catastrophic Inundation"},
+        {"id": "station_banda_aceh", "name": "Banda Aceh", "region": "Sumatra, Indonesia", "lat": 5.548, "lon": 95.323, "dist_km": 250, "arrival_hours": 0.35, "arrival_utc": "2004-12-26T01:20:00Z", "wave_height_m": 31.0, "status": "Catastrophic Inundation"},
+        {"id": "station_car_nicobar", "name": "Car Nicobar", "region": "Nicobar Islands, India", "lat": 9.150, "lon": 92.810, "dist_km": 720, "arrival_hours": 0.50, "arrival_utc": "2004-12-26T01:29:00Z", "wave_height_m": 7.2, "status": "Severe Submergence"},
+        {"id": "station_port_blair", "name": "Port Blair", "region": "Andaman Islands, India", "lat": 11.667, "lon": 92.733, "dist_km": 980, "arrival_hours": 0.65, "arrival_utc": "2004-12-26T01:38:00Z", "wave_height_m": 5.8, "status": "Major Coastal Surge"},
+        {"id": "station_phuket", "name": "Phuket", "region": "Andaman Coast, Thailand", "lat": 7.880, "lon": 98.392, "dist_km": 580, "arrival_hours": 1.75, "arrival_utc": "2004-12-26T02:44:00Z", "wave_height_m": 5.5, "status": "Severe Beach Surge"},
+        {"id": "station_trincomalee", "name": "Trincomalee", "region": "Eastern Province, Sri Lanka", "lat": 8.587, "lon": 81.215, "dist_km": 1720, "arrival_hours": 1.95, "arrival_utc": "2004-12-26T02:56:00Z", "wave_height_m": 6.2, "status": "Catastrophic Surge"},
+        {"id": "station_galle", "name": "Galle", "region": "Southern Coast, Sri Lanka", "lat": 6.053, "lon": 80.221, "dist_km": 1780, "arrival_hours": 2.05, "arrival_utc": "2004-12-26T03:02:00Z", "wave_height_m": 8.5, "status": "Catastrophic Inundation"},
+        {"id": "station_chennai", "name": "Chennai (Marina Beach)", "region": "Tamil Nadu, India", "lat": 13.082, "lon": 80.270, "dist_km": 2100, "arrival_hours": 2.15, "arrival_utc": "2004-12-26T03:08:00Z", "wave_height_m": 4.5, "status": "Severe Urban Inundation"},
+        {"id": "station_cuddalore", "name": "Cuddalore", "region": "Tamil Nadu, India", "lat": 11.748, "lon": 79.771, "dist_km": 2080, "arrival_hours": 2.20, "arrival_utc": "2004-12-26T03:11:00Z", "wave_height_m": 5.2, "status": "Major Coastal Destruction"},
+        {"id": "station_nagapattinam", "name": "Nagapattinam", "region": "Tamil Nadu, India", "lat": 10.767, "lon": 79.843, "dist_km": 2050, "arrival_hours": 2.25, "arrival_utc": "2004-12-26T03:14:00Z", "wave_height_m": 6.8, "status": "Catastrophic Mainland Strike"},
+        {"id": "station_visakhapatnam", "name": "Visakhapatnam", "region": "Andhra Pradesh, India", "lat": 17.686, "lon": 83.218, "dist_km": 2150, "arrival_hours": 2.35, "arrival_utc": "2004-12-26T03:20:00Z", "wave_height_m": 2.4, "status": "Harbor Water Level Surge"},
+        {"id": "station_kanyakumari", "name": "Kanyakumari", "region": "Tamil Nadu, India", "lat": 8.088, "lon": 77.538, "dist_km": 2180, "arrival_hours": 2.45, "arrival_utc": "2004-12-26T03:26:00Z", "wave_height_m": 5.5, "status": "Cape Surge & Flooding"},
+        {"id": "station_paradip", "name": "Paradip", "region": "Odisha, India", "lat": 20.316, "lon": 86.611, "dist_km": 2220, "arrival_hours": 2.65, "arrival_utc": "2004-12-26T03:38:00Z", "wave_height_m": 1.8, "status": "Port Resonance Surge"},
+        {"id": "station_male", "name": "Male", "region": "Maldives Atolls", "lat": 4.175, "lon": 73.509, "dist_km": 2520, "arrival_hours": 3.25, "arrival_utc": "2004-12-26T04:14:00Z", "wave_height_m": 3.5, "status": "Atoll Overwash & Flooding"},
+        {"id": "station_diego_garcia", "name": "Diego Garcia", "region": "BIOT, Central Indian Ocean", "lat": -7.319, "lon": 72.422, "dist_km": 2850, "arrival_hours": 3.75, "arrival_utc": "2004-12-26T04:44:00Z", "wave_height_m": 1.8, "status": "Lagoon Tide Surge"},
+        {"id": "station_seychelles", "name": "Port Victoria (Mahe)", "region": "Seychelles", "lat": -4.619, "lon": 55.451, "dist_km": 4450, "arrival_hours": 7.10, "arrival_utc": "2004-12-26T08:05:00Z", "wave_height_m": 1.9, "status": "Bridge & Pier Damage"},
+        {"id": "station_mauritius", "name": "Port Louis", "region": "Mauritius", "lat": -20.160, "lon": 57.501, "dist_km": 5050, "arrival_hours": 7.20, "arrival_utc": "2004-12-26T08:11:00Z", "wave_height_m": 1.4, "status": "Coastal Harbor Surge"},
+        {"id": "station_hafun", "name": "Hafun", "region": "Puntland, Somalia", "lat": 10.424, "lon": 51.265, "dist_km": 4900, "arrival_hours": 7.75, "arrival_utc": "2004-12-26T08:44:00Z", "wave_height_m": 4.5, "status": "Severe Trans-Oceanic Inundation"},
+        {"id": "station_mogadishu", "name": "Mogadishu", "region": "Somalia, East Africa", "lat": 2.046, "lon": 45.318, "dist_km": 5600, "arrival_hours": 8.10, "arrival_utc": "2004-12-26T09:05:00Z", "wave_height_m": 2.8, "status": "Coastal Inundation"},
+        {"id": "station_mombasa", "name": "Mombasa", "region": "Kenya", "lat": -4.043, "lon": 39.668, "dist_km": 6250, "arrival_hours": 8.65, "arrival_utc": "2004-12-26T09:38:00Z", "wave_height_m": 2.1, "status": "Harbor Water Drawdown & Surge"},
+        {"id": "station_durban", "name": "Durban", "region": "South Africa", "lat": -29.858, "lon": 31.021, "dist_km": 7200, "arrival_hours": 11.35, "arrival_utc": "2004-12-26T12:20:00Z", "wave_height_m": 1.5, "status": "Harbor Piers Surge"}
+    ]
+
+    # Sunda Trench megathrust rupture polyline (1,300 km arc)
+    fault_rupture_arc = [
+        {"lat": 2.50, "lon": 96.00, "name": "Simeulue Island (South End)"},
+        {"lat": 3.316, "lon": 95.854, "name": "Epicenter (Main Mw 9.1 Rupture)"},
+        {"lat": 5.20, "lon": 94.60, "name": "North Sumatra Shelf"},
+        {"lat": 7.00, "lon": 93.80, "name": "Great Nicobar"},
+        {"lat": 9.20, "lon": 92.90, "name": "Car Nicobar Trench"},
+        {"lat": 11.50, "lon": 92.60, "name": "South Andaman Trench"},
+        {"lat": 13.80, "lon": 92.90, "name": "North Andaman (Rupture Termination)"}
+    ]
+
+    # Travel time isochrones (radii in km corresponding to travel hours)
+    isochrones = [
+        {"hour": 1.0, "radius_km": 750, "front_speed_kmh": 750, "label": "1 Hour: Andaman & Nicobar, North Sumatra"},
+        {"hour": 2.0, "radius_km": 1500, "front_speed_kmh": 740, "label": "2 Hours: Sri Lanka East Coast, Bay of Bengal Entry"},
+        {"hour": 3.0, "radius_km": 2250, "front_speed_kmh": 730, "label": "3 Hours: Tamil Nadu (Chennai/Nagapattinam), Maldives"},
+        {"hour": 4.0, "radius_km": 3000, "front_speed_kmh": 720, "label": "4 Hours: Central Indian Basin, Chagos Trench"},
+        {"hour": 6.0, "radius_km": 4400, "front_speed_kmh": 710, "label": "6 Hours: Mid-Indian Ridge, Seychelles Approach"},
+        {"hour": 8.0, "radius_km": 5800, "front_speed_kmh": 700, "label": "8 Hours: East African Coastline (Somalia, Kenya)"},
+        {"hour": 10.0, "radius_km": 7200, "front_speed_kmh": 690, "label": "10 Hours: Madagascar, Mozambique Channel, South Africa"}
+    ]
+
     # Save simulation dataset
     cube_data = {
         "event": "2004 Sumatra-Andaman Earthquake & Indian Ocean Tsunami",
-        "epicenter": {"latitude": EPICENTER_LAT, "longitude": EPICENTER_LON, "magnitude": 9.1},
+        "epicenter": {
+            "latitude": EPICENTER_LAT,
+            "longitude": EPICENTER_LON,
+            "magnitude": 9.1,
+            "depth_km": 30.0,
+            "seismic_moment_nm": "1.1e23",
+            "rupture_duration_sec": 500,
+            "rupture_length_km": 1300
+        },
         "origin_time": ORIGIN_TIME,
         "lats_sampled": np.round(lats[::2], 2).tolist(),
         "lons_sampled": np.round(lons[::2], 2).tolist(),
         "frames": hourly_frames,
+        "coastal_stations": coastal_stations,
+        "fault_rupture_arc": fault_rupture_arc,
+        "isochrones": isochrones,
         "jason1_altimetry_pass": {
             "pass_id": "Jason-1 Cycle 109 Pass 129",
             "flyover_time": "2004-12-26T02:55:00Z",
             "measured_peak_crest_cm": 60.5,
             "measured_trough_cm": -42.1,
+            "open_ocean_depth_m": 4100.0,
             "track_latitude_range": [-10.0, 15.0],
             "track_longitude": 84.5
         }
@@ -124,9 +183,13 @@ def build_tsunami_dataset():
         "event_id": "tsunami_2004",
         "title": "2004 Great Indian Ocean Tsunami",
         "date": "2004-12-26",
-        "affected_regions": ["Sumatra", "Andaman & Nicobar", "Tamil Nadu (Chennai)", "Sri Lanka", "Maldives", "Somalia"],
+        "origin_time": ORIGIN_TIME,
+        "magnitude": 9.1,
+        "affected_regions": ["Sumatra (Indonesia)", "Andaman & Nicobar (India)", "Tamil Nadu (India)", "Sri Lanka", "Thailand", "Maldives", "Seychelles", "Somalia"],
         "epicenter": {"lat": EPICENTER_LAT, "lon": EPICENTER_LON},
-        "physics": "Barotropic long-gravity wave propagation c = sqrt(g*H)",
+        "fault_rupture_length_km": 1300,
+        "physics": "Barotropic long-gravity shallow water wave propagation c = sqrt(g*H)",
+        "coastal_stations_count": len(coastal_stations),
         "simulation_file": str(out_file.relative_to(PROJECT_ROOT))
     }
     (OUT_EVENTS / "tsunami_2004_metadata.json").write_text(json.dumps(meta_event, indent=2), encoding="utf-8")
@@ -134,3 +197,4 @@ def build_tsunami_dataset():
 
 if __name__ == "__main__":
     build_tsunami_dataset()
+
