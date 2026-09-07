@@ -34,69 +34,176 @@ const BATHYMETRY_BOUNDS = {
 // diver can actually reach (camera clamps to -17..7.5).
 const PATCH_DEGREES = 1.6
 
-function useBathymetrySampler() {
-  const texture = useLoader(THREE.TextureLoader, '/data/bathymetry_relief.png')
-
-  const pixels = useMemo(() => {
-    const img = texture.image as HTMLImageElement
-    const canvas = document.createElement('canvas')
-    canvas.width = img.width
-    canvas.height = img.height
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-    ctx.drawImage(img, 0, 0)
-    return { data: ctx.getImageData(0, 0, img.width, img.height).data, width: img.width, height: img.height }
-  }, [texture])
-
-  return useMemo(() => {
-    return (lat: number, lon: number): number => {
-      if (!pixels) return 0
-      const u = (lon - BATHYMETRY_BOUNDS.lon_min) / (BATHYMETRY_BOUNDS.lon_max - BATHYMETRY_BOUNDS.lon_min)
-      const v = (BATHYMETRY_BOUNDS.lat_max - lat) / (BATHYMETRY_BOUNDS.lat_max - BATHYMETRY_BOUNDS.lat_min)
-      const px = THREE.MathUtils.clamp(Math.round(u * (pixels.width - 1)), 0, pixels.width - 1)
-      const py = THREE.MathUtils.clamp(Math.round(v * (pixels.height - 1)), 0, pixels.height - 1)
-      const idx = (py * pixels.width + px) * 4
-      return (pixels.data[idx] / 255) * 7500 // matches fetch_bathymetry.py's normalization exactly
-    }
-  }, [pixels])
-}
-
 function Terrain({ selection }: { selection: Selection }) {
-  const sampleDepth = useBathymetrySampler()
+  const [bathymetry, setBathymetry] = useState<{
+    data: Uint8ClampedArray
+    width: number
+    height: number
+  } | null>(null)
+
+  useEffect(() => {
+    const image = new Image()
+
+    image.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = image.width
+      canvas.height = image.height
+
+      const ctx = canvas.getContext('2d')
+
+      if (!ctx) {
+        console.warn('Bathymetry: could not create canvas context')
+        return
+      }
+
+      try {
+        ctx.drawImage(image, 0, 0)
+
+        const imageData = ctx.getImageData(
+          0,
+          0,
+          image.width,
+          image.height,
+        )
+
+        setBathymetry({
+          data: imageData.data,
+          width: image.width,
+          height: image.height,
+        })
+
+        console.info(
+          `Bathymetry loaded: ${image.width}x${image.height}`,
+        )
+      } catch (error) {
+        console.error(
+          'Bathymetry pixel read failed:',
+          error,
+        )
+      }
+    }
+
+    image.onerror = () => {
+      console.error(
+        'Bathymetry image failed to load:',
+        '/data/bathymetry_relief.png',
+      )
+    }
+
+    image.src = '/data/bathymetry_relief.png'
+  }, [])
 
   const geometry = useMemo(() => {
     const size = 260
     const segments = 96
-    const positions = new Float32Array((segments + 1) * (segments + 1) * 3)
+
+    const positions = new Float32Array(
+      (segments + 1) * (segments + 1) * 3,
+    )
+
     const indices: number[] = []
-    const rawDepths = new Float32Array((segments + 1) * (segments + 1))
+
+    const rawDepths = new Float32Array(
+      (segments + 1) * (segments + 1),
+    )
 
     let minDepth = Infinity
     let maxDepth = -Infinity
 
+    const sampleDepth = (lat: number, lon: number) => {
+      if (!bathymetry) return 0
+
+      const u =
+        (lon - BATHYMETRY_BOUNDS.lon_min) /
+        (BATHYMETRY_BOUNDS.lon_max - BATHYMETRY_BOUNDS.lon_min)
+
+      const v =
+        (BATHYMETRY_BOUNDS.lat_max - lat) /
+        (BATHYMETRY_BOUNDS.lat_max - BATHYMETRY_BOUNDS.lat_min)
+
+      const px = THREE.MathUtils.clamp(
+        Math.round(u * (bathymetry.width - 1)),
+        0,
+        bathymetry.width - 1,
+      )
+
+      const py = THREE.MathUtils.clamp(
+        Math.round(v * (bathymetry.height - 1)),
+        0,
+        bathymetry.height - 1,
+      )
+
+      const index =
+        (py * bathymetry.width + px) * 4
+
+      return (bathymetry.data[index] / 255) * 7500
+    }
+
     for (let z = 0; z <= segments; z += 1) {
       for (let x = 0; x <= segments; x += 1) {
-        const i = z * (segments + 1) + x
-        const fx = x / segments - 0.5
-        const fz = z / segments - 0.5
-        const lat = selection.latitude - fz * PATCH_DEGREES
-        const lon = selection.longitude + fx * PATCH_DEGREES
-        const depth = sampleDepth(lat, lon)
+        const i =
+          z * (segments + 1) + x
+
+        const fx =
+          x / segments - 0.5
+
+        const fz =
+          z / segments - 0.5
+
+        const lat =
+          selection.latitude -
+          fz * PATCH_DEGREES
+
+        const lon =
+          selection.longitude +
+          fx * PATCH_DEGREES
+
+        const depth =
+          sampleDepth(lat, lon)
+
         rawDepths[i] = depth
-        if (depth < minDepth) minDepth = depth
-        if (depth > maxDepth) maxDepth = depth
+
+        if (bathymetry) {
+          minDepth = Math.min(
+            minDepth,
+            depth,
+          )
+
+          maxDepth = Math.max(
+            maxDepth,
+            depth,
+          )
+        }
       }
     }
 
-    const range = Math.max(1, maxDepth - minDepth)
+    // Safe flat fallback until bathymetry loads.
+    if (!bathymetry) {
+      minDepth = 0
+      maxDepth = 1
+    }
+
+    const range =
+      Math.max(1, maxDepth - minDepth)
 
     for (let z = 0; z <= segments; z += 1) {
       for (let x = 0; x <= segments; x += 1) {
-        const i = z * (segments + 1) + x
-        const px = (x / segments - 0.5) * size
-        const pz = (z / segments - 0.5) * size
-        const normalized = (rawDepths[i] - minDepth) / range
-        const y = -18 - normalized * 14 // real relative relief, compressed into playable range
+        const i =
+          z * (segments + 1) + x
+
+        const px =
+          (x / segments - 0.5) * size
+
+        const pz =
+          (z / segments - 0.5) * size
+
+        const normalized =
+          bathymetry
+            ? (rawDepths[i] - minDepth) / range
+            : 0
+
+        const y =
+          -18 - normalized * 14
 
         positions[i * 3] = px
         positions[i * 3 + 1] = y
@@ -106,25 +213,50 @@ function Terrain({ selection }: { selection: Selection }) {
 
     for (let z = 0; z < segments; z += 1) {
       for (let x = 0; x < segments; x += 1) {
-        const a = z * (segments + 1) + x
+        const a =
+          z * (segments + 1) + x
+
         const b = a + 1
         const c = a + segments + 1
         const d = c + 1
+
         indices.push(a, c, b)
         indices.push(b, c, d)
       }
     }
 
-    const result = new THREE.BufferGeometry()
-    result.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    const result =
+      new THREE.BufferGeometry()
+
+    result.setAttribute(
+      'position',
+      new THREE.BufferAttribute(
+        positions,
+        3,
+      ),
+    )
+
     result.setIndex(indices)
     result.computeVertexNormals()
+
     return result
-  }, [selection.latitude, selection.longitude, sampleDepth])
+  }, [
+    bathymetry,
+    selection.latitude,
+    selection.longitude,
+  ])
 
   return (
-    <mesh geometry={geometry} receiveShadow position={[0, 0, 0]}>
-      <meshStandardMaterial color="#38413f" roughness={0.96} metalness={0} />
+    <mesh
+      geometry={geometry}
+      receiveShadow
+      position={[0, 0, 0]}
+    >
+      <meshStandardMaterial
+        color="#38413f"
+        roughness={0.96}
+        metalness={0}
+      />
     </mesh>
   )
 }
@@ -955,7 +1087,23 @@ function DiveWorld({
 
 export default function ImmersiveOcean(props: Props) {
   return <Canvas shadows camera={{ position: [0, 3, 55], fov: 64, near: .1, far: 400 }} dpr={[1, 2]} gl={{ antialias: true }}>
-    <Suspense fallback={null}>
+    <Suspense
+        fallback={
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'grid',
+              placeItems: 'center',
+              color: '#9beeff',
+              background: '#06384d',
+              fontFamily: 'sans-serif',
+            }}
+          >
+            Loading Ocean Dive…
+          </div>
+        }
+      >
       <DiveWorld {...props} />
     </Suspense>
   </Canvas>
