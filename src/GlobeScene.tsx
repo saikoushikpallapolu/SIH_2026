@@ -407,6 +407,7 @@ function OceanShader({
         transparent: true,
         uniforms: {
           uTime: { value: 0 },
+          uMonthPhase: { value: (timeIndex / 12) * Math.PI * 2 },
           uDepth: { value: depth },
           uVariable: {
             value: ['temperature', 'salinity', 'chlorophyll', 'currents'].indexOf(variable),
@@ -431,6 +432,7 @@ function OceanShader({
         `,
         fragmentShader: `
           uniform float uTime;
+          uniform float uMonthPhase;
           uniform float uDepth;
           uniform float uVariable;
           uniform float uOverlayStrength;
@@ -442,6 +444,13 @@ function OceanShader({
           varying vec2 vUv;
           varying vec3 vNormal;
           varying vec3 vPosition;
+
+          // Gaussian patch helper in spherical coordinates
+          float patchDist(float lat, float lon, float cLat, float cLon, float rLat, float rLon) {
+            float dLat = (lat - cLat) / rLat;
+            float dLon = (lon - cLon) / rLon;
+            return dLat * dLat + dLon * dLon;
+          }
 
           // 1. Temperature: cmocean thermal
           vec3 paletteThermal(float t) {
@@ -479,21 +488,21 @@ function OceanShader({
             return mix(c5, c6, (t - 0.82) / 0.18);
           }
 
-          // 3. Chlorophyll: NASA MODIS Ocean Color / cmocean alga
+          // 3. Chlorophyll: NASA MODIS Ocean Color / cmocean alga (Ultra-Vivid Global Color Grading)
           vec3 paletteAlga(float t) {
-            vec3 c0 = vec3(0.01, 0.05, 0.11);
-            vec3 c1 = vec3(0.02, 0.18, 0.18);
-            vec3 c2 = vec3(0.06, 0.38, 0.22);
-            vec3 c3 = vec3(0.15, 0.62, 0.28);
-            vec3 c4 = vec3(0.38, 0.85, 0.32);
-            vec3 c5 = vec3(0.72, 0.94, 0.36);
-            vec3 c6 = vec3(1.0, 0.96, 0.42);
-            if (t < 0.16) return mix(c0, c1, t / 0.16);
-            if (t < 0.32) return mix(c1, c2, (t - 0.16) / 0.16);
-            if (t < 0.48) return mix(c2, c3, (t - 0.32) / 0.16);
+            vec3 c0 = vec3(0.015, 0.08, 0.22); // Oligotrophic gyres (rich deep sapphire blue)
+            vec3 c1 = vec3(0.02, 0.24, 0.36);  // Low-moderate productivity cyan-teal (0.2 mg/m3)
+            vec3 c2 = vec3(0.06, 0.52, 0.34);  // Marine emerald green (0.5 mg/m3)
+            vec3 c3 = vec3(0.18, 0.78, 0.35);  // Rich vibrant phytoplankton green (0.9 mg/m3)
+            vec3 c4 = vec3(0.58, 0.94, 0.26);  // Luminous chartreuse bloom (1.5 mg/m3)
+            vec3 c5 = vec3(0.96, 0.96, 0.22);  // Radiant golden biological peak (2.2 mg/m3)
+            vec3 c6 = vec3(1.0, 0.62, 0.12);   // Hyper-productive upwelling core (> 3.0 mg/m3)
+            if (t < 0.15) return mix(c0, c1, t / 0.15);
+            if (t < 0.30) return mix(c1, c2, (t - 0.15) / 0.15);
+            if (t < 0.48) return mix(c2, c3, (t - 0.30) / 0.18);
             if (t < 0.66) return mix(c3, c4, (t - 0.48) / 0.18);
-            if (t < 0.84) return mix(c4, c5, (t - 0.66) / 0.18);
-            return mix(c5, c6, (t - 0.84) / 0.16);
+            if (t < 0.82) return mix(c4, c5, (t - 0.66) / 0.16);
+            return mix(c5, c6, (t - 0.82) / 0.18);
           }
 
           // 4. Currents: cmocean speed
@@ -616,6 +625,8 @@ function OceanShader({
               return;
             }
 
+            float lat = (vUv.y - 0.5) * 180.0;
+            float lon = (vUv.x - 0.5) * 360.0;
             float latFromEq = abs(vUv.y - 0.5) * 2.0;
             float tropicality = pow(max(0.0, cos(latFromEq * 1.5708)), 1.3);
             float thermocline = 1.0 - exp(-uDepth / (200.0 + tropicality * 140.0));
@@ -628,18 +639,70 @@ function OceanShader({
               fieldColor = paletteThermal(normVal);
             }
             else if (uVariable < 1.5) {
-              float regionalEvap = (0.5 - vUv.x) * 1.8;
-              float gyre = sin(latFromEq * 3.1416);
-              float baseSal = clamp(0.32 + gyre * 0.42 + regionalEvap * 0.28 + thermocline * 0.1, 0.0, 1.0);
-              float isohaline = abs(fract(baseSal * 10.0) - 0.5);
-              float contour = smoothstep(0.44, 0.48, isohaline) * 0.15;
-              fieldColor = paletteHaline(baseSal) + vec3(contour * 0.6, contour * 0.8, contour);
+              // SALINITY (cmocean haline):
+              // Evaporative high-salinity vs river plume low-salinity
+              float baseSal = 0.52; // ~35 PSU baseline
+              float arabianHigh = exp(-patchDist(lat, lon, 18.0, 62.0, 12.0, 14.0)) * 0.38;
+              float redSeaHigh = exp(-patchDist(lat, lon, 22.0, 38.0, 10.0, 8.0)) * 0.44;
+              float medHigh = exp(-patchDist(lat, lon, 35.0, 18.0, 8.0, 20.0)) * 0.32;
+              float atlHigh = exp(-patchDist(lat, lon, 25.0, -45.0, 16.0, 25.0)) * 0.22;
+              float bobLow = -exp(-patchDist(lat, lon, 18.0, 88.0, 10.0, 12.0)) * 0.36;
+              float amazonLow = -exp(-patchDist(lat, lon, 4.0, -48.0, 8.0, 12.0)) * 0.38;
+              float polarLow = -smoothstep(45.0, 70.0, abs(lat)) * 0.26;
+
+              float salNorm = clamp(baseSal + arabianHigh + redSeaHigh + medHigh + atlHigh + bobLow + amazonLow + polarLow + thermocline * 0.08, 0.0, 1.0);
+              
+              // Delicate isohaline front contours
+              float isohaline = abs(fract(salNorm * 11.0) - 0.5);
+              float contour = smoothstep(0.44, 0.48, isohaline) * 0.16;
+              fieldColor = paletteHaline(salNorm) + vec3(contour * 0.6, contour * 0.8, contour);
             }
             else if (uVariable < 2.5) {
-              float coastProximity = smoothstep(0.42, 0.49, texture2D(uWaterMask, vUv).r);
-              float bloomFilament = sin(vPosition.x * 18.0 + sin(vPosition.y * 14.0 + uTime * 0.5) * 3.0) * 0.5 + 0.5;
-              float southernFront = smoothstep(0.65, 0.95, vUv.y);
-              float chlVal = clamp(0.04 + (1.0 - coastProximity) * 0.65 + bloomFilament * 0.28 + southernFront * 0.45 - thermocline * 0.25, 0.0, 1.0);
+              // CHLOROPHYLL (NASA MODIS Ocean Color / cmocean alga):
+              // Global Continuous Primary Productivity & Hotspot Blooms
+              float coastProx = 1.0 - smoothstep(0.20, 0.48, texture2D(uWaterMask, vUv).r);
+
+              // 1. Somali Upwelling (Indian Ocean)
+              float somali = exp(-patchDist(lat, lon, 9.5, 51.5, 7.0, 7.0)) * (0.85 + 0.5 * max(0.0, sin(uMonthPhase - 1.1)));
+              // 2. Malabar Coast / Sri Lanka Dome (Indian Ocean)
+              float malabar = exp(-patchDist(lat, lon, 11.5, 74.5, 6.0, 5.0)) * 0.72;
+              // 3. Ganges-Brahmaputra Delta (Bay of Bengal)
+              float ganges = exp(-patchDist(lat, lon, 19.5, 88.5, 6.5, 7.5)) * 0.82;
+              // 4. Mozambique & Agulhas Bank
+              float agulhas = exp(-patchDist(lat, lon, -30.0, 34.0, 8.0, 8.0)) * 0.75;
+              // 5. Peru / Humboldt Upwelling (Pacific Ocean - World's Largest Fishery Bloom)
+              float humboldt = exp(-patchDist(lat, lon, -14.5, -77.5, 14.0, 7.0)) * 0.95;
+              // 6. Benguela Upwelling (South Atlantic Ocean)
+              float benguela = exp(-patchDist(lat, lon, -23.0, 13.5, 11.0, 5.5)) * 0.88;
+              // 7. California Current Upwelling (North Pacific)
+              float california = exp(-patchDist(lat, lon, 38.0, -124.0, 12.0, 6.5)) * 0.78;
+              // 8. Canary / Mauritania Upwelling (North Atlantic)
+              float canary = exp(-patchDist(lat, lon, 22.0, -18.0, 10.0, 6.0)) * 0.80;
+              // 9. Amazon River Oceanic Plume (Atlantic)
+              float amazon = exp(-patchDist(lat, lon, 3.5, -49.0, 7.0, 10.0)) * 0.88;
+              // 10. Mississippi Delta / Gulf of Mexico
+              float mississippi = exp(-patchDist(lat, lon, 28.5, -89.5, 4.5, 6.0)) * 0.75;
+              // 11. Pacific Equatorial Upwelling Divergence Belt (Cold Tongue Chlorophyll Band)
+              float eqPacific = exp(-pow(lat / 3.8, 2.0)) * smoothstep(-175.0, -140.0, lon) * (1.0 - smoothstep(-85.0, -75.0, lon)) * 0.42;
+              // 12. Circum-Antarctic Subpolar Nutrient Belt
+              float subantarctic = smoothstep(-40.0, -56.0, lat) * (1.0 - smoothstep(-68.0, -78.0, lat)) * 0.52;
+              // 13. North Atlantic & North Pacific Subpolar Spring Blooms
+              float northSubpolar = smoothstep(45.0, 62.0, lat) * 0.48 * (0.8 + 0.35 * sin(uMonthPhase));
+
+              // Dynamic undulating biological filaments
+              float eddyFilament = sin(vPosition.x * 22.0 + sin(vPosition.y * 16.0 + uTime * 0.4) * 3.2) * 0.5 + 0.5;
+
+              // Continuous baseline everywhere across globe (0.08 baseline + coast + hotspots + filaments)
+              float chlVal = clamp(
+                0.08 +
+                coastProx * 0.42 +
+                somali + malabar + ganges + agulhas + humboldt + benguela + california + canary + amazon + mississippi + eqPacific + subantarctic + northSubpolar +
+                eddyFilament * 0.12 -
+                thermocline * 0.22,
+                0.0,
+                1.0
+              );
+
               fieldColor = paletteAlga(chlVal);
             }
             else {
@@ -691,6 +754,7 @@ function OceanShader({
   })
 
   material.uniforms.uDepth.value = depth
+  material.uniforms.uMonthPhase.value = (timeIndex / 12) * Math.PI * 2
   material.uniforms.uVariable.value = ['temperature', 'salinity', 'chlorophyll', 'currents'].indexOf(variable)
   material.uniforms.uOverlayStrength.value = overlayStrength
   material.uniforms.uTsunamiActive.value = tsunamiActive ? 1.0 : 0.0

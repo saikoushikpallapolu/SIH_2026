@@ -305,16 +305,6 @@ export default function App() {
               <Globe2 size={14} /> Globe
             </button>
             <button
-              className={mode === 'currents' ? 'active' : ''}
-              onClick={() => {
-                setMode('currents')
-                setVariable('currents')
-                setIsTsunamiPlaying(false)
-              }}
-            >
-              <Wind size={14} /> Ocean Currents
-            </button>
-            <button
               className={mode === 'tsunami' ? 'active' : ''}
               onClick={() => {
                 setMode('tsunami')
@@ -438,6 +428,13 @@ export default function App() {
               <strong>
                 {telemetry.current_speed_m_s.toFixed(2)}
                 <small>m/s</small>
+              </strong>
+            </div>
+            <div className="metric-box">
+              <span>CHLOROPHYLL</span>
+              <strong>
+                {telemetry.chlorophyll_mg_m3.toFixed(2)}
+                <small>mg/m³</small>
               </strong>
             </div>
           </div>
@@ -922,7 +919,10 @@ export default function App() {
             <div className="variable-pills">
               <button
                 className={`var-pill ${variable === 'temperature' ? 'active' : ''}`}
-                onClick={() => setVariable('temperature')}
+                onClick={() => {
+                  setVariable('temperature')
+                  if (mode === 'currents') setMode('explore')
+                }}
                 title="cmocean thermal: SST & Thermocline"
               >
                 <Thermometer size={13} />
@@ -931,20 +931,26 @@ export default function App() {
               </button>
               <button
                 className={`var-pill ${variable === 'salinity' ? 'active' : ''}`}
-                onClick={() => setVariable('salinity')}
+                onClick={() => {
+                  setVariable('salinity')
+                  if (mode === 'currents') setMode('explore')
+                }}
                 title="cmocean haline: Arabian Evaporation Basin vs Bengal River Plumes"
               >
                 <Droplets size={13} />
-                <span>Halocline</span>
+                <span>Salinity</span>
                 <i style={{ color: '#5ce5d5' }} />
               </button>
               <button
                 className={`var-pill ${variable === 'chlorophyll' ? 'active' : ''}`}
-                onClick={() => setVariable('chlorophyll')}
+                onClick={() => {
+                  setVariable('chlorophyll')
+                  if (mode === 'currents') setMode('explore')
+                }}
                 title="NASA alga: Coastal Upwelling Blooms vs Oligotrophic Desert"
               >
                 <Activity size={13} />
-                <span>Biomass</span>
+                <span>Chlorophyll</span>
                 <i style={{ color: '#7cd362' }} />
               </button>
               <button
@@ -956,7 +962,7 @@ export default function App() {
                 title="cmocean speed: Active Geodesic Streamline Flow"
               >
                 <Wind size={13} />
-                <span>Streamlines</span>
+                <span>Ocean Currents</span>
                 <i style={{ color: '#00f2fe' }} />
               </button>
               <button
