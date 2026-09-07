@@ -1,11 +1,12 @@
 import { useFrame } from '@react-three/fiber'
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
   generateOceanStreamlines,
   latLngToVector3,
   GLOBE_RADIUS,
   type StreamlineCurve,
+  onCurrentsGridUpdate,
 } from './oceanDataEngine'
 
 interface OceanCurrentFlowProps {
@@ -122,10 +123,16 @@ export default function OceanCurrentFlow({
   flowIntensity = 1.0,
   flowSpeed = 1.0,
 }: OceanCurrentFlowProps) {
+  const [gridVersion, setGridVersion] = useState(0)
+
+  useEffect(() => {
+    return onCurrentsGridUpdate(() => setGridVersion((v) => v + 1))
+  }, [])
+
   // 1. Generate smooth, curved streamlines via 4th-order Runge-Kutta on the sphere
   const curves = useMemo<StreamlineCurve[]>(() => {
     return generateOceanStreamlines(depth, timeIndex)
-  }, [depth, timeIndex])
+  }, [depth, timeIndex, gridVersion])
 
   // 2. Build merged BufferGeometry for all streamlines (Layer 2)
   const { streamlineGeom, material } = useMemo(() => {

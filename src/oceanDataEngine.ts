@@ -12,10 +12,15 @@ export const GLOBE_RADIUS = 1.55
 export const API_BASE = 'http://127.0.0.1:8000'
 
 export const INDIAN_OCEAN_BOUNDS = {
-  minLon: 20,
-  maxLon: 125,
-  minLat: -45,
-  maxLat: 32,
+  minLon: 20.008333,
+  maxLon: 125.008333,
+  minLat: -44.991667,
+  maxLat: 32.008333,
+}
+
+export const GRID_DIMS = {
+  nLat: 309,
+  nLon: 421,
 }
 
 export function isPointInIndianOcean(lat: number, lon: number): boolean {
@@ -151,10 +156,95 @@ export function identifyBasin(lat: number, lon: number): string {
   return 'Indian Ocean Pelagic Waters'
 }
 
+// In-memory cache for 2D ocean data slices: key = "variable_month_depth"
+const sliceCache = new Map<string, Float32Array>()
+
 /**
- * Computes realistic geostrophic and wind-driven ocean circulation velocity (u, v in m/s)
- * across the Indian Ocean gyres, Somali Jet, South Equatorial Current, and Agulhas stream,
- * modulated by physical vertical depth attenuation and seasonal monsoon forcing.
+ * Fetches a dynamic 2D Float32 slice (309 x 421) from the FastAPI binary cubes engine.
+ */
+export async function fetchOceanDataSlice(
+  variable: OceanVariable,
+  month: number,
+  depth: number
+): Promise<Float32Array | null> {
+  const clampedMonth = Math.max(0, Math.min(299, Math.round(month)))
+  const clampedDepth = Math.max(0, Math.min(5000, depth))
+  const cacheKey = `${variable}_${clampedMonth}_${clampedDepth.toFixed(1)}`
+
+  if (sliceCache.has(cacheKey)) {
+    return sliceCache.get(cacheKey)!
+  }
+
+  try {
+    const url = `${API_BASE}/api/slice?variable=${variable}&month=${clampedMonth}&depth=${clampedDepth}`
+    const resp = await fetch(url)
+    if (resp.ok) {
+      const buf = await resp.arrayBuffer()
+      const floatArr = new Float32Array(buf)
+      if (sliceCache.size > 96) {
+        const firstKey = sliceCache.keys().next().value
+        if (firstKey) sliceCache.delete(firstKey)
+      }
+      sliceCache.set(cacheKey, floatArr)
+      return floatArr
+    }
+  } catch (err) {
+    console.warn('Failed to fetch 2D ocean slice:', err)
+  }
+  return null
+}
+
+// In-memory active monthly currents grid: raw (U, V) Float32 components
+let activeCurrentsMonth = -1
+let activeCurrentsU: Float32Array | null = null
+let activeCurrentsV: Float32Array | null = null
+let currentsLoadingMonth = -1
+const currentsListeners = new Set<() => void>()
+
+export function onCurrentsGridUpdate(callback: () => void) {
+  currentsListeners.add(callback)
+  return () => {
+    currentsListeners.delete(callback)
+  }
+}
+
+/**
+ * Pre-fetches and caches the full 2D (U, V) vector velocity grid for the active month.
+ */
+export async function fetchCurrentsGrid(month: number): Promise<boolean> {
+  const clampedMonth = Math.max(0, Math.min(299, Math.round(month)))
+  if (activeCurrentsMonth === clampedMonth && activeCurrentsU && activeCurrentsV) {
+    return true
+  }
+  if (currentsLoadingMonth === clampedMonth) {
+    return false
+  }
+
+  currentsLoadingMonth = clampedMonth
+  try {
+    const url = `${API_BASE}/api/currents/grid?month=${clampedMonth}`
+    const resp = await fetch(url)
+    if (resp.ok) {
+      const buf = await resp.arrayBuffer()
+      const fullArr = new Float32Array(buf)
+      const cells = GRID_DIMS.nLat * GRID_DIMS.nLon // 309 * 421 = 130089
+      activeCurrentsU = fullArr.subarray(0, cells)
+      activeCurrentsV = fullArr.subarray(cells, 2 * cells)
+      activeCurrentsMonth = clampedMonth
+      currentsLoadingMonth = -1
+      currentsListeners.forEach((cb) => cb())
+      return true
+    }
+  } catch (err) {
+    console.warn('Failed to fetch currents grid:', err)
+  }
+  currentsLoadingMonth = -1
+  return false
+}
+
+/**
+ * Evaluates ocean circulation velocity (u, v in m/s) driven directly by
+ * the 25-year currents data cubes (`currents_u_25yr.bin`, `currents_v_25yr.bin`).
  */
 export function getOceanVelocity(
   lat: number,
@@ -162,6 +252,67 @@ export function getOceanVelocity(
   timeIndex = 0,
   depth = 0
 ): { u: number; v: number; speed: number } {
+  const month = Math.max(0, Math.min(299, Math.round(timeIndex)))
+  if (activeCurrentsMonth !== month && currentsLoadingMonth !== month) {
+    fetchCurrentsGrid(month)
+  }
+
+  // If inside Indian Ocean basin and dataset grid is loaded, interpolate directly from cubes
+  if (
+    activeCurrentsU &&
+    activeCurrentsV &&
+    lat >= INDIAN_OCEAN_BOUNDS.minLat &&
+    lat <= INDIAN_OCEAN_BOUNDS.maxLat &&
+    lon >= INDIAN_OCEAN_BOUNDS.minLon &&
+    lon <= INDIAN_OCEAN_BOUNDS.maxLon
+  ) {
+    const i_f =
+      ((lat - INDIAN_OCEAN_BOUNDS.minLat) /
+        (INDIAN_OCEAN_BOUNDS.maxLat - INDIAN_OCEAN_BOUNDS.minLat)) *
+      (GRID_DIMS.nLat - 1)
+    const j_f =
+      ((lon - INDIAN_OCEAN_BOUNDS.minLon) /
+        (INDIAN_OCEAN_BOUNDS.maxLon - INDIAN_OCEAN_BOUNDS.minLon)) *
+      (GRID_DIMS.nLon - 1)
+
+    const i0 = Math.min(Math.floor(i_f), GRID_DIMS.nLat - 2)
+    const j0 = Math.min(Math.floor(j_f), GRID_DIMS.nLon - 2)
+    const i1 = i0 + 1
+    const j1 = j0 + 1
+
+    const uFrac = j_f - j0
+    const vFrac = i_f - i0
+    const w00 = (1.0 - uFrac) * (1.0 - vFrac)
+    const w10 = uFrac * (1.0 - vFrac)
+    const w01 = (1.0 - uFrac) * vFrac
+    const w11 = uFrac * vFrac
+
+    const nCols = GRID_DIMS.nLon
+    const uVal =
+      w00 * activeCurrentsU[i0 * nCols + j0] +
+      w10 * activeCurrentsU[i0 * nCols + j1] +
+      w01 * activeCurrentsU[i1 * nCols + j0] +
+      w11 * activeCurrentsU[i1 * nCols + j1]
+
+    const vVal =
+      w00 * activeCurrentsV[i0 * nCols + j0] +
+      w10 * activeCurrentsV[i0 * nCols + j1] +
+      w01 * activeCurrentsV[i1 * nCols + j0] +
+      w11 * activeCurrentsV[i1 * nCols + j1]
+
+    const depthAtten = Math.exp(-Math.max(0, depth) / 320.0)
+    const u = uVal * depthAtten
+    const v = vVal * depthAtten
+    const speed = Math.sqrt(u * u + v * v)
+
+    return {
+      u: Math.round(u * 1000) / 1000,
+      v: Math.round(v * 1000) / 1000,
+      speed: Math.round(speed * 1000) / 1000,
+    }
+  }
+
+  // --- High-Fidelity Physics Model (Fallback & Outside Indian Ocean Basin) ---
   let u = 0.05
   let v = 0.02
 
@@ -171,8 +322,8 @@ export function getOceanVelocity(
   const wyrtkiAtten = Math.exp(-Math.max(0, depth) / 180) // Shallow equatorial jet
 
   // Seasonal monsoon factor (Southwest monsoon May-Sept, Northeast monsoon Nov-Feb)
-  const month = ((timeIndex % 12) + 12) % 12
-  const summerMonsoon = Math.sin(((month - 3) / 12) * Math.PI * 2)
+  const monthMod = ((timeIndex % 12) + 12) % 12
+  const summerMonsoon = Math.sin(((monthMod - 3) / 12) * Math.PI * 2)
 
   // 1. Somali Current & Great Whirl (0° to 14°N, 42° to 58°E)
   // In SW monsoon (summerMonsoon > 0): powerful northward jet up to 2.2 m/s + clockwise Great Whirl
@@ -220,7 +371,9 @@ export function getOceanVelocity(
   // 4. Equatorial Jets (Wyrtki Jets): Eastward surges in May and November transition periods
   else if (lat >= -3.5 && lat <= 3.5 && lon >= 55 && lon <= 98) {
     const eq = Math.cos((lat / 3.5) * (Math.PI / 2))
-    const isTransition = Math.max(0, Math.cos((month - 4) * (Math.PI / 6))) + Math.max(0, Math.cos((month - 10) * (Math.PI / 6)))
+    const isTransition =
+      Math.max(0, Math.cos((monthMod - 4) * (Math.PI / 6))) +
+      Math.max(0, Math.cos((monthMod - 10) * (Math.PI / 6)))
     const jetSpeed = 0.35 + 0.45 * Math.min(1.0, isTransition)
     u = (jetSpeed * eq) * wyrtkiAtten
     v = 0.02 * Math.sin(lon * 0.15) * wyrtkiAtten
@@ -647,6 +800,79 @@ export async function querySubgridTelemetry(
   const local = getSubgridLocalEstimate(lat, lon, depth, month)
   telemetryCache.set(cacheKey, local)
   return local
+}
+
+const sliceTextureCache = new Map<string, THREE.DataTexture>()
+
+/**
+ * Fetches dynamic Float32 2D ocean slice from FastAPI /api/slice and builds a GPU DataTexture.
+ */
+export async function fetchOceanSliceTexture(
+  variable: OceanVariable,
+  month: number,
+  depth: number
+): Promise<THREE.DataTexture | null> {
+  const cacheKey = `${variable}_${month}_${Math.round(depth)}`
+  if (sliceTextureCache.has(cacheKey)) {
+    return sliceTextureCache.get(cacheKey)!
+  }
+
+  try {
+    const url = `${API_BASE}/api/slice?variable=${variable}&month=${month}&depth=${depth}`
+    const resp = await fetch(url)
+    if (!resp.ok) return null
+
+    const buf = await resp.arrayBuffer()
+    const floatArr = new Float32Array(buf)
+    if (floatArr.length !== 309 * 421) return null
+
+    const uint8Arr = new Uint8Array(floatArr.length)
+    if (variable === 'temperature') {
+      // Map [-2.0, 33.0] °C to [0, 255]
+      for (let i = 0; i < floatArr.length; i++) {
+        const val = floatArr[i]
+        uint8Arr[i] = Math.max(0, Math.min(255, Math.round(((val - (-2.0)) / 35.0) * 255)))
+      }
+    } else if (variable === 'salinity') {
+      // Map [30.0, 38.0] PSU to [0, 255]
+      for (let i = 0; i < floatArr.length; i++) {
+        const val = floatArr[i]
+        uint8Arr[i] = Math.max(0, Math.min(255, Math.round(((val - 30.0) / 8.0) * 255)))
+      }
+    } else if (variable === 'chlorophyll') {
+      // Map [0.0, 3.0] mg/m³ to [0, 255]
+      for (let i = 0; i < floatArr.length; i++) {
+        const val = floatArr[i]
+        uint8Arr[i] = Math.max(0, Math.min(255, Math.round((val / 3.0) * 255)))
+      }
+    } else {
+      // Currents speed [0.0, 2.5] m/s
+      for (let i = 0; i < floatArr.length; i++) {
+        const val = floatArr[i]
+        uint8Arr[i] = Math.max(0, Math.min(255, Math.round((val / 2.5) * 255)))
+      }
+    }
+
+    const tex = new THREE.DataTexture(uint8Arr, 421, 309, THREE.RedFormat, THREE.UnsignedByteType)
+    tex.minFilter = THREE.LinearFilter
+    tex.magFilter = THREE.LinearFilter
+    tex.generateMipmaps = false
+    tex.needsUpdate = true
+
+    if (sliceTextureCache.size > 80) {
+      const firstKey = sliceTextureCache.keys().next().value
+      if (firstKey) {
+        sliceTextureCache.get(firstKey)?.dispose()
+        sliceTextureCache.delete(firstKey)
+      }
+    }
+
+    sliceTextureCache.set(cacheKey, tex)
+    return tex
+  } catch (err) {
+    console.warn('Failed to fetch slice texture from backend:', err)
+    return null
+  }
 }
 
 /**

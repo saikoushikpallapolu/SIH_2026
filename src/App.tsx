@@ -73,9 +73,9 @@ export default function App() {
   const [mode, setMode] = useState<ViewMode>(() => {
     try {
       const p = new URLSearchParams(window.location.search).get('mode')
-      if (p === 'explore' || p === 'currents' || p === 'dive') return p
+      if (p === 'explore' || p === 'currents' || p === 'dive' || p === 'tsunami') return p
     } catch {}
-    return 'tsunami'
+    return 'explore'
   })
   const [variable, setVariable] = useState<OceanVariable>(() => {
     try {
@@ -95,7 +95,7 @@ export default function App() {
     return 25
   })
   const [monthIndex, setMonthIndex] = useState<number>(292) // May 2024 pre-monsoon heatwave baseline
-  const [isPlaying, setIsPlaying] = useState<boolean>(false)
+  const [isPlaying, setIsPlaying] = useState<boolean>(true)
   const [selection, setSelection] = useState<Selection>({ latitude: 3.316, longitude: 95.854 })
   const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
   const [teleportNonce, setTeleportNonce] = useState<number>(0)
@@ -257,7 +257,7 @@ export default function App() {
           <GlobeScene
             variable={variable}
             depth={depth}
-            timeIndex={monthIndex % 12}
+            timeIndex={monthIndex}
             mode={mode}
             overlayStrength={0.78}
             instruments={showInstruments ? instruments : []}

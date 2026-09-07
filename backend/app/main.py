@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -19,8 +19,8 @@ TEXTURES_DIR = PROCESSED_DIR / "textures"
 OBS_FILE = PROCESSED_DIR / "observations" / "instruments_catalog.json"
 DB_PATH = PROCESSED_DIR / "oceanscope.db"
 
-LAT_MIN, LAT_MAX = -45.0, 32.0
-LON_MIN, LON_MAX = 20.0, 125.0
+LAT_MIN, LAT_MAX = -44.991667, 32.008333
+LON_MIN, LON_MAX = 20.008333, 125.008333
 N_LAT, N_LON = 309, 421
 DEPTH_LEVELS = [0, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000]
 
@@ -237,10 +237,11 @@ def subgrid_telemetry(
     current_u = 0.0
     current_v = 0.0
     chlorophyll = 0.15
+    atten = float(np.exp(-max(0.0, depth) / 320.0))
     if u_mem is not None and not is_land:
-        current_u = round(float(w00 * u_mem[month, i0, j0] + w10 * u_mem[month, i0, j1] + w01 * u_mem[month, i1, j0] + w11 * u_mem[month, i1, j1]), 3)
+        current_u = round(float(w00 * u_mem[month, i0, j0] + w10 * u_mem[month, i0, j1] + w01 * u_mem[month, i1, j0] + w11 * u_mem[month, i1, j1]) * atten, 3)
     if v_mem is not None and not is_land:
-        current_v = round(float(w00 * v_mem[month, i0, j0] + w10 * v_mem[month, i0, j1] + w01 * v_mem[month, i1, j0] + w11 * v_mem[month, i1, j1]), 3)
+        current_v = round(float(w00 * v_mem[month, i0, j0] + w10 * v_mem[month, i0, j1] + w01 * v_mem[month, i1, j0] + w11 * v_mem[month, i1, j1]) * atten, 3)
     if chl_mem is not None and not is_land:
         chlorophyll = round(float(w00 * chl_mem[month, i0, j0] + w10 * chl_mem[month, i0, j1] + w01 * chl_mem[month, i1, j0] + w11 * chl_mem[month, i1, j1]), 3)
 
@@ -330,6 +331,107 @@ def currents_vectors(
         "count": len(vectors),
         "vectors": vectors,
     }
+
+
+@app.get("/api/slice")
+def get_slice(
+    variable: str = Query("temperature"),
+    month: int = Query(299, ge=0, le=299),
+    depth: float = Query(0.0, ge=0.0, le=5000.0),
+) -> Response:
+    """Return a dynamic 2D Float32 slice (309 x 421) for the requested variable, month, and depth."""
+    if variable == "temperature":
+        temp_mem = get_temp_memmap()
+        if temp_mem is None:
+            raise HTTPException(status_code=503, detail="Temperature cube not loaded")
+        cube_3d = temp_mem[month]  # shape: (16, 309, 421)
+        if depth <= DEPTH_LEVELS[0]:
+            slice_data = np.array(cube_3d[0], dtype=np.float32)
+        elif depth >= DEPTH_LEVELS[-1]:
+            slice_data = np.array(cube_3d[-1], dtype=np.float32)
+        else:
+            for idx in range(len(DEPTH_LEVELS) - 1):
+                d0, d1 = DEPTH_LEVELS[idx], DEPTH_LEVELS[idx + 1]
+                if d0 <= depth <= d1:
+                    frac = (depth - d0) / (d1 - d0)
+                    slice_data = (1.0 - frac) * cube_3d[idx].astype(np.float32) + frac * cube_3d[idx + 1].astype(np.float32)
+                    break
+            else:
+                slice_data = np.array(cube_3d[0], dtype=np.float32)
+
+    elif variable == "salinity":
+        sal_mem = get_sal_memmap()
+        if sal_mem is None:
+            raise HTTPException(status_code=503, detail="Salinity cube not loaded")
+        cube_3d = sal_mem[month]  # shape: (16, 309, 421)
+        if depth <= DEPTH_LEVELS[0]:
+            slice_data = np.array(cube_3d[0], dtype=np.float32)
+        elif depth >= DEPTH_LEVELS[-1]:
+            slice_data = np.array(cube_3d[-1], dtype=np.float32)
+        else:
+            for idx in range(len(DEPTH_LEVELS) - 1):
+                d0, d1 = DEPTH_LEVELS[idx], DEPTH_LEVELS[idx + 1]
+                if d0 <= depth <= d1:
+                    frac = (depth - d0) / (d1 - d0)
+                    slice_data = (1.0 - frac) * cube_3d[idx].astype(np.float32) + frac * cube_3d[idx + 1].astype(np.float32)
+                    break
+            else:
+                slice_data = np.array(cube_3d[0], dtype=np.float32)
+
+    elif variable == "chlorophyll":
+        chl_mem = get_chl_memmap()
+        if chl_mem is None:
+            raise HTTPException(status_code=503, detail="Chlorophyll cube not loaded")
+        slice_data = np.array(chl_mem[month], dtype=np.float32)
+
+    elif variable == "currents":
+        u_mem = get_u_memmap()
+        v_mem = get_v_memmap()
+        if u_mem is None or v_mem is None:
+            raise HTTPException(status_code=503, detail="Currents cubes not loaded")
+        u_val = u_mem[month].astype(np.float32)
+        v_val = v_mem[month].astype(np.float32)
+        atten = float(np.exp(-max(0.0, depth) / 320.0))
+        slice_data = np.sqrt(u_val**2 + v_val**2) * atten
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported variable: {variable}")
+
+    return Response(
+        content=slice_data.tobytes(),
+        media_type="application/octet-stream",
+        headers={
+            "X-Grid-Rows": str(N_LAT),
+            "X-Grid-Cols": str(N_LON),
+            "X-Variable": variable,
+            "X-Month": str(month),
+            "X-Depth": str(depth),
+            "Access-Control-Expose-Headers": "*",
+        }
+    )
+
+
+@app.get("/api/currents/grid")
+def currents_grid(month: int = Query(299, ge=0, le=299)) -> Response:
+    """Return raw Float32 (U, V) velocity grid shape (2, 309, 421) for client-side vector integration."""
+    u_mem = get_u_memmap()
+    v_mem = get_v_memmap()
+    if u_mem is None or v_mem is None:
+        raise HTTPException(status_code=503, detail="Currents cubes not loaded")
+    
+    grid_uv = np.stack([u_mem[month].astype(np.float32), v_mem[month].astype(np.float32)], axis=0)
+    return Response(
+        content=grid_uv.tobytes(),
+        media_type="application/octet-stream",
+        headers={
+            "X-Grid-Channels": "2",
+            "X-Grid-Rows": str(N_LAT),
+            "X-Grid-Cols": str(N_LON),
+            "X-Month": str(month),
+            "Access-Control-Expose-Headers": "*",
+        }
+    )
+
 
 
 

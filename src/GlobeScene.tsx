@@ -12,6 +12,8 @@ import {
   computeSphericalTangent,
   CURRENT_SYSTEMS,
   TSUNAMI_HISTORIC_DATA,
+  fetchOceanDataSlice,
+  onCurrentsGridUpdate,
 } from './oceanDataEngine'
 import type {
   CoastalStation,
@@ -93,6 +95,11 @@ function CurrentsVectorField({
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const arrowGeom = useMemo(() => createArrowGeometry(), [])
   const dummy = useMemo(() => new THREE.Object3D(), [])
+  const [gridVersion, setGridVersion] = useState(0)
+
+  useEffect(() => {
+    return onCurrentsGridUpdate(() => setGridVersion((v) => v + 1))
+  }, [])
 
   // Sample grid over Indian Ocean: lat -44 to 26, lon 24 to 118
   const gridPoints = useMemo(() => {
@@ -142,7 +149,7 @@ function CurrentsVectorField({
 
     mesh.instanceMatrix.needsUpdate = true
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
-  }, [active, timeIndex, gridPoints, dummy])
+  }, [active, timeIndex, gridPoints, dummy, gridVersion])
 
   if (!active) return null
 
@@ -401,6 +408,19 @@ function OceanShader({
   )
   earthMap.colorSpace = THREE.SRGBColorSpace
 
+  // Dynamic 2D WebGL DataTexture (421 lon x 309 lat) for the active dataset slice
+  const sliceTexture = useMemo(() => {
+    const initData = new Float32Array(421 * 309)
+    const tex = new THREE.DataTexture(initData, 421, 309, THREE.RedFormat, THREE.FloatType)
+    tex.minFilter = THREE.LinearFilter
+    tex.magFilter = THREE.LinearFilter
+    tex.wrapS = THREE.ClampToEdgeWrapping
+    tex.wrapT = THREE.ClampToEdgeWrapping
+    tex.generateMipmaps = false
+    tex.needsUpdate = true
+    return tex
+  }, [])
+
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -418,6 +438,8 @@ function OceanShader({
           uTsunamiActive: { value: tsunamiActive ? 1.0 : 0.0 },
           uTsunamiHour: { value: tsunamiHour },
           uTsunamiPropMap: { value: texSumatra },
+          uOceanDataSlice: { value: sliceTexture },
+          uHasDataSlice: { value: 0.0 },
         },
         vertexShader: `
           varying vec2 vUv;
@@ -441,6 +463,8 @@ function OceanShader({
           uniform float uTsunamiActive;
           uniform float uTsunamiHour;
           uniform sampler2D uTsunamiPropMap;
+          uniform sampler2D uOceanDataSlice;
+          uniform float uHasDataSlice;
           varying vec2 vUv;
           varying vec3 vNormal;
           varying vec3 vPosition;
@@ -589,13 +613,9 @@ function OceanShader({
                     waveElevation = clamp(waveElevation, 0.0, 1.0);
 
                     // Restrained scientific oceanographic palette:
-                    // Deep Oceanic Indigo (Trough)
                     vec3 troughColor = vec3(0.012, 0.065, 0.22);
-                    // Rich Marine Azure (Swell flank)
                     vec3 swellColor = vec3(0.00, 0.44, 0.88);
-                    // Luminous Electric Cyan (Wave crest)
                     vec3 crestColor = vec3(0.05, 0.86, 0.98);
-                    // Restrained Pale Sky-White (Sea-spray crest highlight)
                     vec3 highlightColor = vec3(0.92, 0.98, 1.0);
 
                     vec3 waveColor;
@@ -631,38 +651,26 @@ function OceanShader({
             float tropicality = pow(max(0.0, cos(latFromEq * 1.5708)), 1.3);
             float thermocline = 1.0 - exp(-uDepth / (200.0 + tropicality * 140.0));
 
-            vec3 fieldColor = vec3(0.0);
-
+            // --- 1. GLOBAL BASELINE FIELD (Outside Indian Ocean Basin) ---
+            vec3 globalBaseColor = vec3(0.0);
             if (uVariable < 0.5) {
-              float wave = sin(vPosition.x * 4.0 + uTime * 0.4) * 0.04;
+              float wave = sin(vPosition.x * 4.0 + uTime * 0.4) * 0.03;
               float normVal = clamp(0.1 + tropicality * 0.88 - thermocline * 0.76 + wave, 0.0, 1.0);
-              fieldColor = paletteThermal(normVal);
+              globalBaseColor = paletteThermal(normVal);
             }
             else if (uVariable < 1.5) {
-              // SALINITY (cmocean haline):
-              // Evaporative high-salinity vs river plume low-salinity
-              float baseSal = 0.52; // ~35 PSU baseline
-              float arabianHigh = exp(-patchDist(lat, lon, 18.0, 62.0, 12.0, 14.0)) * 0.38;
-              float redSeaHigh = exp(-patchDist(lat, lon, 22.0, 38.0, 10.0, 8.0)) * 0.44;
-              float medHigh = exp(-patchDist(lat, lon, 35.0, 18.0, 8.0, 20.0)) * 0.32;
+              float baseSal = 0.52;
               float atlHigh = exp(-patchDist(lat, lon, 25.0, -45.0, 16.0, 25.0)) * 0.22;
-              float bobLow = -exp(-patchDist(lat, lon, 18.0, 88.0, 10.0, 12.0)) * 0.36;
+              float medHigh = exp(-patchDist(lat, lon, 35.0, 18.0, 8.0, 20.0)) * 0.32;
               float amazonLow = -exp(-patchDist(lat, lon, 4.0, -48.0, 8.0, 12.0)) * 0.38;
               float polarLow = -smoothstep(45.0, 70.0, abs(lat)) * 0.26;
-
-              float salNorm = clamp(baseSal + arabianHigh + redSeaHigh + medHigh + atlHigh + bobLow + amazonLow + polarLow + thermocline * 0.08, 0.0, 1.0);
-              
-              // Delicate isohaline front contours
-              float isohaline = abs(fract(salNorm * 11.0) - 0.5);
-              float contour = smoothstep(0.44, 0.48, isohaline) * 0.16;
-              fieldColor = paletteHaline(salNorm) + vec3(contour * 0.6, contour * 0.8, contour);
+              float salNorm = clamp(baseSal + atlHigh + medHigh + amazonLow + polarLow + thermocline * 0.08, 0.0, 1.0);
+              globalBaseColor = paletteHaline(salNorm);
             }
             else if (uVariable < 2.5) {
-              // CHLOROPHYLL (NASA MODIS Ocean Color / cmocean alga):
-              // Global Continuous Primary Productivity & Hotspot Blooms
               float coastProx = 1.0 - smoothstep(0.20, 0.48, texture2D(uWaterMask, vUv).r);
 
-              // 1. Somali Upwelling (Indian Ocean)
+              // 1. Somali Upwelling (Indian Ocean) - seasonal monsoon surge
               float somali = exp(-patchDist(lat, lon, 9.5, 51.5, 7.0, 7.0)) * (0.85 + 0.5 * max(0.0, sin(uMonthPhase - 1.1)));
               // 2. Malabar Coast / Sri Lanka Dome (Indian Ocean)
               float malabar = exp(-patchDist(lat, lon, 11.5, 74.5, 6.0, 5.0)) * 0.72;
@@ -682,7 +690,7 @@ function OceanShader({
               float amazon = exp(-patchDist(lat, lon, 3.5, -49.0, 7.0, 10.0)) * 0.88;
               // 10. Mississippi Delta / Gulf of Mexico
               float mississippi = exp(-patchDist(lat, lon, 28.5, -89.5, 4.5, 6.0)) * 0.75;
-              // 11. Pacific Equatorial Upwelling Divergence Belt (Cold Tongue Chlorophyll Band)
+              // 11. Pacific Equatorial Upwelling Divergence Belt
               float eqPacific = exp(-pow(lat / 3.8, 2.0)) * smoothstep(-175.0, -140.0, lon) * (1.0 - smoothstep(-85.0, -75.0, lon)) * 0.42;
               // 12. Circum-Antarctic Subpolar Nutrient Belt
               float subantarctic = smoothstep(-40.0, -56.0, lat) * (1.0 - smoothstep(-68.0, -78.0, lat)) * 0.52;
@@ -692,38 +700,67 @@ function OceanShader({
               // Dynamic undulating biological filaments
               float eddyFilament = sin(vPosition.x * 22.0 + sin(vPosition.y * 16.0 + uTime * 0.4) * 3.2) * 0.5 + 0.5;
 
-              // Continuous baseline everywhere across globe (0.08 baseline + coast + hotspots + filaments)
+              // Continuous baseline everywhere across globe
               float chlVal = clamp(
-                0.08 +
-                coastProx * 0.42 +
-                somali + malabar + ganges + agulhas + humboldt + benguela + california + canary + amazon + mississippi + eqPacific + subantarctic + northSubpolar +
-                eddyFilament * 0.12 -
-                thermocline * 0.22,
+                0.08 + coastProx * 0.42 +
+                somali + malabar + ganges + agulhas +
+                humboldt + benguela + california + canary + amazon + mississippi + eqPacific + subantarctic + northSubpolar +
+                eddyFilament * 0.12 - thermocline * 0.22,
                 0.0,
                 1.0
               );
-
-              fieldColor = paletteAlga(chlVal);
+              globalBaseColor = paletteAlga(chlVal);
             }
             else {
-              // CURRENTS BASE OCEAN:
-              // Clean, sleek, dark semi-transparent ocean surface with subtle ambient flow kinetic energy.
-              // Streamlines (Layer 2) and Luminous Particles (Layer 3) render cleanly on top.
               float kineticCore = exp(-pow(latFromEq / 0.28, 2.0)) * 0.32;
               float flowGlow = clamp(0.08 + kineticCore, 0.0, 1.0);
-              fieldColor = paletteSpeed(flowGlow) * 0.55;
+              globalBaseColor = paletteSpeed(flowGlow) * 0.55;
             }
 
-            // GLOBAL OCEAN COVERAGE: All oceans (Pacific, Atlantic, Southern, Arctic, Indian)
-            // render continuous, physically grounded scientific fields worldwide.
-            float light = max(dot(vNormal, normalize(vec3(1.0, 0.8, 1.2))), 0.0);
+            // --- 2. 4D DIGITAL TWIN HIGH-RESOLUTION DATASET FIELD (Indian Ocean Basin) ---
+            // Exact NOAA ETOPO cell center bounds:
+            // Latitude:  -44.991667 to 32.008333
+            // Longitude:  20.008333 to 125.008333
+            float uSector = clamp((lon - 20.008333) / (125.008333 - 20.008333), 0.0, 1.0);
+            float vSector = clamp((lat - (-44.991667)) / (32.008333 - (-44.991667)), 0.0, 1.0);
+            float rawDatasetVal = texture2D(uOceanDataSlice, vec2(uSector, vSector)).r;
+
+            // Subtle dynamic wave shimmer to keep ocean surface organically animated
+            float shimmer = sin(vPosition.x * 6.0 + uTime * 0.4) * 0.012;
+
+            vec3 twinColor = vec3(0.0);
+            if (uVariable < 0.5) {
+              // Temperature: fixed physical scientific range [2.0, 32.0] °C
+              float normT = clamp((rawDatasetVal - 2.0) / (32.0 - 2.0) + shimmer, 0.0, 1.0);
+              twinColor = paletteThermal(normT);
+            }
+            else if (uVariable < 1.5) {
+              // Salinity: fixed physical scientific range [30.0, 38.0] PSU
+              float normS = clamp((rawDatasetVal - 30.0) / (38.0 - 30.0), 0.0, 1.0);
+              float isohaline = abs(fract(normS * 11.0) - 0.5);
+              float contour = smoothstep(0.44, 0.48, isohaline) * 0.16;
+              twinColor = paletteHaline(normS) + vec3(contour * 0.6, contour * 0.8, contour);
+            }
+            else if (uVariable < 2.5) {
+              // Chlorophyll: fixed physical scientific range [0.03, 2.5] mg/m³
+              float normC = clamp((rawDatasetVal - 0.03) / (2.5 - 0.03), 0.0, 1.0);
+              twinColor = paletteAlga(normC);
+            }
+            else {
+              // Currents: fixed physical speed range [0.0, 2.0] m/s
+              float normSpd = clamp(rawDatasetVal / 2.0, 0.0, 1.0);
+              twinColor = paletteSpeed(normSpd) * 0.55;
+            }
 
             // Indian Ocean High-Resolution 4D Digital Twin Sector [20°E, 125°E], [-45°S, 32°N]
             float inLon = smoothstep(0.535, 0.565, vUv.x) * (1.0 - smoothstep(0.835, 0.865, vUv.x));
             float inLat = smoothstep(0.235, 0.265, vUv.y) * (1.0 - smoothstep(0.665, 0.695, vUv.y));
             float inIndianOcean = inLon * inLat;
 
-            // Global base data intensity with high-resolution enhancement in the Indian Ocean twin sector
+            // Blend dataset-driven field directly into twin sector
+            vec3 fieldColor = mix(globalBaseColor, twinColor, inIndianOcean * uHasDataSlice);
+
+            float light = max(dot(vNormal, normalize(vec3(1.0, 0.8, 1.2))), 0.0);
             float overlayIntensity = mix(uOverlayStrength * 0.72, uOverlayStrength * 1.05, inIndianOcean);
             vec3 litOcean = mix(earth, fieldColor * (0.54 + light * 0.72), overlayIntensity);
 
@@ -739,8 +776,25 @@ function OceanShader({
           }
         `,
       }),
-    [variable, earthMap, waterMask, overlayStrength]
+    [variable, earthMap, waterMask, overlayStrength, sliceTexture]
   )
+
+  useEffect(() => {
+    let active = true
+    fetchOceanDataSlice(variable, timeIndex, depth).then((data) => {
+      if (!active) return
+      if (data) {
+        ;(sliceTexture.image.data as Float32Array).set(data)
+        sliceTexture.needsUpdate = true
+        material.uniforms.uHasDataSlice.value = 1.0
+      } else {
+        material.uniforms.uHasDataSlice.value = 0.0
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [variable, depth, timeIndex, sliceTexture, material])
 
   useFrame(({ clock }) => {
     material.uniforms.uTime.value = clock.getElapsedTime()
