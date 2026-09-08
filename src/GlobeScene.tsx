@@ -31,8 +31,8 @@ import OceanCurrentFlow from './OceanCurrentFlow'
 import GlobeAreaSelector from './GlobeAreaSelector'
 
 const RADIUS = GLOBE_RADIUS
-const EARTH_DAY_MAP = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'
-const EARTH_WATER_MASK = 'https://threejs.org/examples/textures/planets/earth_specular_2048.jpg'
+const EARTH_DAY_MAP = '/data/earth_day_4096.jpg'
+const EARTH_WATER_MASK = '/data/earth_specular_2048.jpg'
 
 /**
  * Creates a merged cylinder shaft + cone arrowhead BufferGeometry for 3D vector arrows.
@@ -410,7 +410,21 @@ function OceanShader({
       '/data/tsunami_travel_time_2012_wharton.png',
     ]
   )
-  earthMap.colorSpace = THREE.SRGBColorSpace
+  // High-Resolution Anisotropic Texture Filtering for crisp zoom
+  useEffect(() => {
+    earthMap.colorSpace = THREE.SRGBColorSpace
+    earthMap.anisotropy = 16
+    earthMap.generateMipmaps = true
+    earthMap.minFilter = THREE.LinearMipmapLinearFilter
+    earthMap.magFilter = THREE.LinearFilter
+    earthMap.needsUpdate = true
+
+    waterMask.anisotropy = 16
+    waterMask.generateMipmaps = true
+    waterMask.minFilter = THREE.LinearMipmapLinearFilter
+    waterMask.magFilter = THREE.LinearFilter
+    waterMask.needsUpdate = true
+  }, [earthMap, waterMask])
 
   // Dynamic 2D WebGL DataTexture (421 lon x 309 lat) for the active dataset slice
   const sliceTexture = useMemo(() => {
@@ -551,8 +565,21 @@ function OceanShader({
           }
 
           void main() {
-            vec3 earth = texture2D(uEarthMap, vUv).rgb;
-            float water = smoothstep(0.18, 0.46, texture2D(uWaterMask, vUv).r);
+            // High-resolution 4K satellite earth unsharp masking & adaptive sharpening
+            vec3 earthRaw = texture2D(uEarthMap, vUv).rgb;
+            vec2 texel = vec2(1.0 / 4096.0, 1.0 / 2048.0);
+            vec3 blurSample = (
+              texture2D(uEarthMap, vUv + vec2(texel.x, 0.0)).rgb +
+              texture2D(uEarthMap, vUv - vec2(texel.x, 0.0)).rgb +
+              texture2D(uEarthMap, vUv + vec2(0.0, texel.y)).rgb +
+              texture2D(uEarthMap, vUv - vec2(0.0, texel.y)).rgb
+            ) * 0.25;
+            vec3 earth = clamp(earthRaw + (earthRaw - blurSample) * 1.25, 0.0, 1.0);
+
+            // Sub-pixel screen-space antialiased shoreline
+            float rawMask = texture2D(uWaterMask, vUv).r;
+            float fw = max(0.0008, fwidth(rawMask) * 1.2);
+            float water = smoothstep(0.33 - fw, 0.33 + fw, rawMask);
 
             // ==========================================================
             // PHYSICAL BATHYMETRY-DRIVEN TSUNAMI PROPAGATION (INDIAN OCEAN)
@@ -721,6 +748,25 @@ function OceanShader({
               globalBaseColor = paletteSpeed(flowGlow) * 0.55;
             }
 
+            // Dynamic authentic 0.25-deg ocean data slice over Indian Ocean
+            if (uHasDataSlice > 0.5 && lat >= -44.875 && lat <= 32.0 && lon >= 20.125 && lon <= 124.875) {
+              float su = (lon - 20.125) / (124.875 - 20.125);
+              float sv = (lat - (-44.875)) / (32.0 - (-44.875));
+              float val = texture2D(uOceanDataSlice, vec2(su, sv)).r;
+              if (val > -990.0) {
+                if (uVariable < 0.5) {
+                  float normT = clamp((val - 2.0) / 30.0, 0.0, 1.0);
+                  globalBaseColor = paletteThermal(normT);
+                } else if (uVariable < 1.5) {
+                  float normS = clamp((val - 31.0) / 6.0, 0.0, 1.0);
+                  globalBaseColor = paletteHaline(normS);
+                } else if (uVariable < 2.5) {
+                  float normC = clamp(val / 3.2, 0.0, 1.0);
+                  globalBaseColor = paletteAlga(normC);
+                }
+              }
+            }
+
             // Lighting and seamless ocean surface synthesis
             float light = max(dot(vNormal, normalize(vec3(0.8, 0.9, 1.0))), 0.0);
             vec3 litOcean = mix(earth, globalBaseColor * (0.65 + light * 0.60), uOverlayStrength);
@@ -732,6 +778,26 @@ function OceanShader({
       }),
     [variable, earthMap, waterMask, overlayStrength, sliceTexture]
   )
+
+  // Fetch real high-resolution 0.25-deg ocean data slice from binary cubes engine
+  useEffect(() => {
+    let active = true
+    const month = Math.floor(timeIndex / 50)
+    fetchOceanDataSlice(variable, month, depth)
+      .then((data) => {
+        if (!active || !data) return
+        const arr = sliceTexture.image.data as Float32Array
+        arr.set(data)
+        sliceTexture.needsUpdate = true
+        material.uniforms.uHasDataSlice.value = 1.0
+      })
+      .catch((err) => {
+        console.warn('Globe slice fallback:', err)
+      })
+    return () => {
+      active = false
+    }
+  }, [variable, timeIndex, depth, sliceTexture, material])
 
   useFrame(({ clock }) => {
     material.uniforms.uTime.value = clock.getElapsedTime()
@@ -869,16 +935,47 @@ function GlobeFishShoals({ timeIndex, active }: { timeIndex: number; active: boo
 }
 
 function Atmosphere() {
+  const material = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        transparent: true,
+        side: THREE.BackSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        uniforms: {
+          uAtmosphereColor: { value: new THREE.Color('#38bdf8') },
+        },
+        vertexShader: `
+          varying vec3 vNormal;
+          varying vec3 vPositionWorld;
+          void main() {
+            vNormal = normalize(normalMatrix * normal);
+            vec4 wp = modelMatrix * vec4(position, 1.0);
+            vPositionWorld = wp.xyz;
+            gl_Position = projectionMatrix * viewMatrix * wp;
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 uAtmosphereColor;
+          varying vec3 vNormal;
+          varying vec3 vPositionWorld;
+          void main() {
+            vec3 viewDir = normalize(cameraPosition - vPositionWorld);
+            // Atmospheric limb scattering: only visible on planetary rim at glancing angles
+            // When viewed directly or zoomed in, rim approaches 0.0, keeping surface pixels crystal-clear
+            float rim = 1.0 - max(0.0, dot(vNormal, viewDir));
+            float alpha = pow(rim, 3.6) * 0.48;
+            if (alpha < 0.003) discard;
+            gl_FragColor = vec4(uAtmosphereColor, alpha);
+          }
+        `,
+      }),
+    []
+  )
+
   return (
-    <mesh scale={1.035}>
+    <mesh scale={1.032} material={material}>
       <sphereGeometry args={[RADIUS, 96, 96]} />
-      <meshBasicMaterial
-        color="#58ddff"
-        transparent
-        opacity={0.12}
-        side={THREE.BackSide}
-        blending={THREE.AdditiveBlending}
-      />
     </mesh>
   )
 }
@@ -1182,6 +1279,7 @@ function CameraDirector({
   mode,
   depth,
   tsunamiScenario,
+  activeBoundary,
 }: {
   targetPoint: Selection
   teleportNonce?: number
@@ -1189,6 +1287,7 @@ function CameraDirector({
   mode: ViewMode
   depth: number
   tsunamiScenario?: TsunamiScenario
+  activeBoundary?: SpatialBoundary | null
 }) {
   const { camera } = useThree()
   const isTeleporting = useRef(false)
@@ -1197,23 +1296,32 @@ function CameraDirector({
   const lastScenarioId = useRef(tsunamiScenario?.id)
   const lastMode = useRef(mode)
 
+  // Cancel automatic camera lerp immediately on manual wheel zoom
+  useEffect(() => {
+    const onWheel = () => {
+      isTeleporting.current = false
+    }
+    window.addEventListener('wheel', onWheel, { passive: true })
+    return () => window.removeEventListener('wheel', onWheel)
+  }, [])
+
   // 1. Teleport when targetPoint / teleportNonce is triggered
   useEffect(() => {
     if (teleportNonce !== undefined && teleportNonce !== lastNonce.current && globeGroupRef.current) {
       lastNonce.current = teleportNonce
       const localVec = latLngToVector3(targetPoint.latitude, targetPoint.longitude, RADIUS)
       const worldVec = localVec.clone().applyMatrix4(globeGroupRef.current.matrixWorld)
-      // When a specific station or coordinate is clicked, zoom to 2.8; else frame Indian Ocean basin at 4.4
+      // When a specific station or coordinate is clicked, zoom to 2.8; when an area is selected, zoom to 2.25
       const isEpicenterTarget =
         tsunamiScenario &&
         Math.abs(targetPoint.latitude - tsunamiScenario.epicenter.latitude) < 0.5 &&
         Math.abs(targetPoint.longitude - tsunamiScenario.epicenter.longitude) < 0.5
 
-      const dist = mode === 'tsunami' && !isEpicenterTarget ? 2.8 : 4.4
+      const dist = mode === 'tsunami' && !isEpicenterTarget ? 2.8 : (activeBoundary ? 2.25 : 4.4)
       targetCamPos.current = worldVec.clone().normalize().multiplyScalar(dist)
       isTeleporting.current = true
     }
-  }, [teleportNonce, targetPoint, globeGroupRef, mode, tsunamiScenario])
+  }, [teleportNonce, targetPoint, globeGroupRef, mode, tsunamiScenario, activeBoundary])
 
   // 2. Smoothly frame Indian Ocean upon entering Tsunami or Currents mode
   useEffect(() => {
@@ -1485,8 +1593,8 @@ function Scene({
           timeIndex={timeIndex}
         />
 
-        {/* Holographic Sonar Beacon at clicked coordinate */}
-        <HolographicBeacon selection={selection} />
+        {/* Holographic Sonar Beacon at clicked coordinate (hidden when boundary box is framing area) */}
+        {!activeBoundary && <HolographicBeacon selection={selection} />}
       </group>
 
       <Atmosphere />
@@ -1498,15 +1606,16 @@ function Scene({
         mode={mode}
         depth={depth}
         tsunamiScenario={tsunamiScenario}
+        activeBoundary={activeBoundary}
       />
 
       <OrbitControls
         enablePan={false}
-        minDistance={1.8}
+        minDistance={1.606}
         maxDistance={5.2}
         enableDamping
         dampingFactor={0.06}
-        autoRotate={mode === 'explore' && !teleportNonce}
+        autoRotate={mode === 'explore' && !teleportNonce && !isSelectingArea && !activeBoundary && !anchorCorner}
         autoRotateSpeed={0.18}
       />
     </>

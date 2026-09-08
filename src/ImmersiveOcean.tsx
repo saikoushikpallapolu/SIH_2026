@@ -43,7 +43,39 @@ const worldLimit = 120
  * Seamlessly populates the ocean dive floor with real continental shelf,
  * abyssal bathymetry, and genuine subaerial coastal/Ghats land relief with vector contours.
  */
-function Terrain({ selection, boundary }: { selection: Selection; boundary?: SpatialBoundary }) {
+function getElevationY(elev: number): number {
+  if (elev >= 0) {
+    // Land rises from 0 at shoreline up to +24 at mountain summits
+    return Math.min(1.0, elev / 1800.0) * 24.0
+  }
+  const depth = -elev
+  // Authentic non-linear bathymetric relief:
+  // Ensures continental shelf is well separated below surface waves, and canyons have dramatic slope
+  if (depth <= 200) {
+    return -(depth / 200.0) * 6.5
+  } else if (depth <= 1500) {
+    const t = (depth - 200.0) / 1300.0
+    return -6.5 - t * 11.5
+  } else {
+    const t = Math.min(1.0, (depth - 1500.0) / 3500.0)
+    return -18.0 - t * 7.0
+  }
+}
+
+/**
+ * Authentic NOAA ETOPO 2022 Bedrock Topography & Bathymetry Terrain.
+ * Populates the ocean dive floor with realistic golden marine sand, continental shelf,
+ * submarine canyon slopes, abyssal bedrock, animated caustics, and vector depth isobaths.
+ */
+function Terrain({
+  selection,
+  boundary,
+  currents,
+}: {
+  selection: Selection
+  boundary?: SpatialBoundary
+  currents?: { u: number; v: number; speed: number }
+}) {
   const [terrainData, setTerrainData] = useState<TerrainSliceData | null>(null)
 
   useEffect(() => {
@@ -78,6 +110,7 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
     const numVerts = res * res
     const positions = new Float32Array(numVerts * 3)
     const colors = new Float32Array(numVerts * 3)
+    const elevations = new Float32Array(numVerts)
     const indices: number[] = []
 
     const color = new THREE.Color()
@@ -91,14 +124,10 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
         const idx = r * res + c
         const elev = elevGrid ? elevGrid[idx] : -1200
 
-        let py = 0.0
+        const py = getElevationY(elev)
+
         if (elev >= 0) {
-          // Authentic Land Elevation Relief (Western Ghats peaks, coastal hills)
-          // Sea level is Y = 0.0. Land rises above sea level into open air.
-          const landRatio = Math.min(1.0, elev / 1800.0)
-          py = landRatio * 24.0 // rises from 0 at shoreline up to +24 at mountain summits
-          
-          // Hypsometric Land Shading
+          // Hypsometric Land Shading (Western Ghats & Coastal Plains)
           if (elev < 80) {
             color.setRGB(0.20, 0.58, 0.28) // Coastal lowlands / verdant plains
           } else if (elev < 400) {
@@ -109,19 +138,27 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
             color.setRGB(0.75, 0.65, 0.52) // Mountain summits & high crags
           }
         } else {
-          // Authentic Ocean Bathymetry Relief
-          // Sea level is Y = 0.0. Ocean seabed drops below sea level.
+          // Authentic Geological Ocean Bed Shading:
+          // Bright warm golden sand in shallows reflects sunlight up through clear water
           const depth = -elev
-          const depthRatio = Math.min(1.0, depth / 4500.0)
-          py = -depthRatio * 25.0 // drops from 0 at shoreline down to -25 on abyssal plain
-          
-          // Bathymetric cmocean Shading
-          if (depth < 200) {
-            color.setRGB(0.06, 0.65, 0.72) // Continental shelf
+          if (depth < 60) {
+            // Nearshore golden marine sandbars
+            color.setRGB(0.88, 0.80, 0.60)
+          } else if (depth < 200) {
+            // Continental shelf: sunlit sand & biogenic sediment
+            color.setRGB(0.74, 0.67, 0.50)
+          } else if (depth < 600) {
+            // Upper continental slope: olive-tan sediment & sandy silt
+            color.setRGB(0.50, 0.54, 0.44)
           } else if (depth < 1500) {
-            color.setRGB(0.05, 0.40, 0.62) // Continental slope
+            // Mid slope & canyon walls: submarine bedrock & rocky ridges
+            color.setRGB(0.32, 0.40, 0.44)
+          } else if (depth < 3000) {
+            // Lower slope: deep oceanic bedrock & basalt
+            color.setRGB(0.18, 0.26, 0.34)
           } else {
-            color.setRGB(0.02, 0.18, 0.38) // Abyssal plain
+            // Abyssal plain: volcanic crust & deep pelagic silt
+            color.setRGB(0.10, 0.16, 0.24)
           }
         }
 
@@ -132,6 +169,8 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
         colors[idx * 3] = color.r
         colors[idx * 3 + 1] = color.g
         colors[idx * 3 + 2] = color.b
+
+        elevations[idx] = elev
       }
     }
 
@@ -150,6 +189,7 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
     const tGeom = new THREE.BufferGeometry()
     tGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     tGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    tGeom.setAttribute('elevation', new THREE.BufferAttribute(elevations, 1))
     tGeom.setIndex(indices)
     tGeom.computeVertexNormals()
 
@@ -203,17 +243,13 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
           const v1 = (p1[0] - minLat) / (maxLat - minLat)
           const x1 = (u1 - 0.5) * size
           const z1 = (0.5 - v1) * size
-          const y1 = isoElev >= 0 
-            ? Math.min(1.0, isoElev / 1800.0) * 24.0 + 0.18 
-            : -Math.min(1.0, -isoElev / 4500.0) * 25.0 + 0.18
+          const y1 = getElevationY(isoElev) + 0.18
 
           const u2 = (p2[1] - minLon) / (maxLon - minLon)
           const v2 = (p2[0] - minLat) / (maxLat - minLat)
           const x2 = (u2 - 0.5) * size
           const z2 = (0.5 - v2) * size
-          const y2 = isoElev >= 0 
-            ? Math.min(1.0, isoElev / 1800.0) * 24.0 + 0.18 
-            : -Math.min(1.0, -isoElev / 4500.0) * 25.0 + 0.18
+          const y2 = getElevationY(isoElev) + 0.18
 
           allContourPts.push(x1, y1, z1, x2, y2, z2)
         }
@@ -238,17 +274,19 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
         cGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cPts), 3))
       }
 
-      // 2. Bathymetric isobaths (-200m shelf break, -1000m slope)
-      const shelfSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, -200)
-      addContourList(shelfSegs, -200)
-      const deepSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, -1000)
-      addContourList(deepSegs, -1000)
+      // 2. Comprehensive Bathymetric Isobaths (-30m, -75m, -150m, -200m shelf break, -500m, -1000m, -2000m, -3000m)
+      const bathyLevels = [-30, -75, -150, -200, -500, -1000, -2000, -3000]
+      for (const iso of bathyLevels) {
+        const segs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, iso)
+        if (segs.length > 0) addContourList(segs, iso)
+      }
 
-      // 3. Topographic isohypses (+150m lowlands, +500m Western Ghats ridge)
-      const topo150 = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, 150)
-      addContourList(topo150, 150)
-      const topo500 = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, 500)
-      addContourList(topo500, 500)
+      // 3. Topographic Isohypses (+150m lowlands, +350m foothills, +700m Western Ghats ridge, +1200m peaks)
+      const topoLevels = [150, 350, 700, 1200]
+      for (const iso of topoLevels) {
+        const segs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, iso)
+        if (segs.length > 0) addContourList(segs, iso)
+      }
 
       if (allContourPts.length > 0) {
         contGeom = new THREE.BufferGeometry()
@@ -259,12 +297,97 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
     return { terrainGeometry: tGeom, skirtGeometry: sGeom, coastlineGeom: cGeom, contourGeom: contGeom }
   }, [terrainData])
 
+  const terrainMaterial = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        vertexColors: true,
+        uniforms: {
+          time: { value: 0 },
+          uCurrentDir: { value: new THREE.Vector2(0.85, 0.35) },
+        },
+        vertexShader: `
+          attribute float elevation;
+          varying vec3 vWorldPos;
+          varying vec3 vNormalWorld;
+          varying vec3 vColor;
+          varying float vElevation;
+          void main() {
+            vColor = color;
+            vElevation = elevation;
+            vec4 wp = modelMatrix * vec4(position, 1.0);
+            vWorldPos = wp.xyz;
+            vNormalWorld = normalize(mat3(modelMatrix) * normal);
+            gl_Position = projectionMatrix * viewMatrix * wp;
+          }
+        `,
+        fragmentShader: `
+          uniform float time;
+          uniform vec2 uCurrentDir;
+          varying vec3 vWorldPos;
+          varying vec3 vNormalWorld;
+          varying vec3 vColor;
+          varying float vElevation;
+
+          float hash21(vec2 p) {
+            p = fract(p * vec2(123.34, 456.21));
+            p += dot(p, p + 45.32);
+            return fract(p.x * p.y);
+          }
+
+          float causticNoise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash21(i);
+            float b = hash21(i + vec2(1.0, 0.0));
+            float c = hash21(i + vec2(0.0, 1.0));
+            float d = hash21(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+          }
+
+          void main() {
+            vec3 N = normalize(vNormalWorld);
+            vec3 L = normalize(vec3(0.35, 0.88, 0.38));
+            float NdotL = max(0.20, dot(N, L));
+            vec3 baseColor = vColor * (0.52 + NdotL * 0.65);
+
+            // Animated sun caustics dancing across the shallow and shelf ocean bed
+            if (vElevation < 0.0) {
+              float depth = -vElevation;
+              float causticFade = clamp(1.0 - depth / 340.0, 0.0, 1.0);
+              if (causticFade > 0.01) {
+                vec2 dir = length(uCurrentDir) > 0.01 ? normalize(uCurrentDir) : vec2(0.85, 0.35);
+                vec2 cUv = vWorldPos.xz * 0.32 + dir * time * 0.42;
+                float c1 = causticNoise(cUv * 3.4);
+                float c2 = causticNoise(cUv * 6.8 - dir * time * 0.25);
+                float caustic = pow(c1 * 0.6 + c2 * 0.4, 2.2) * 2.6;
+                // Warm sunlit caustics on sand
+                baseColor += vec3(0.55, 0.88, 0.95) * caustic * causticFade * max(0.0, N.y);
+              }
+            }
+
+            // Distance fog to blend into the horizon
+            float dist = length(cameraPosition - vWorldPos);
+            float fogFactor = smoothstep(55.0, 360.0, dist);
+            vec3 fogColor = vec3(0.01, 0.08, 0.15);
+            gl_FragColor = vec4(mix(baseColor, fogColor, fogFactor), 1.0);
+          }
+        `,
+      }),
+    []
+  )
+
+  useFrame(({ clock }) => {
+    terrainMaterial.uniforms.time.value = clock.getElapsedTime()
+    if (currents) {
+      terrainMaterial.uniforms.uCurrentDir.value.set(currents.u, currents.v)
+    }
+  })
+
   return (
     <group position={[0, 0, 0]}>
-      {/* Authentic NOAA ETOPO 2022 Seabed & Land Relief Mesh */}
-      <mesh geometry={terrainGeometry}>
-        <meshStandardMaterial vertexColors roughness={0.88} metalness={0.08} />
-      </mesh>
+      {/* Authentic NOAA ETOPO 2022 Seabed & Land Relief Mesh with Caustics */}
+      <mesh geometry={terrainGeometry} material={terrainMaterial} />
 
       {/* Side Pedestal Walls */}
       <mesh geometry={skirtGeometry}>
@@ -281,59 +404,187 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
       {/* Topographic & Bathymetric Contours */}
       {contourGeom && (
         <lineSegments geometry={contourGeom}>
-          <lineBasicMaterial color="#00f2fe" transparent opacity={0.65} linewidth={1} />
+          <lineBasicMaterial color="#00f2fe" transparent opacity={0.75} linewidth={1.2} />
         </lineSegments>
       )}
     </group>
   )
 }
 
-function OceanSurface() {
+/**
+ * High-Realism Physical Ocean Surface.
+ * Propagates natural Gerstner swells and capillary wave-chop along local ocean current vectors (u, v).
+ * Features physical Fresnel transparency (revealing the ocean bed clearly when viewed from above),
+ * wave-crest foam streaks, specular sun glint, and realistic multi-scale water textures.
+ */
+function OceanSurface({
+  currents = { u: 0.35, v: 0.18, speed: 0.42 },
+}: {
+  currents?: { u: number; v: number; speed: number }
+}) {
+  const currentDir = useMemo(() => {
+    const v = new THREE.Vector2(currents.u, currents.v)
+    if (v.lengthSq() > 0.001) v.normalize()
+    else v.set(0.85, 0.35)
+    return v
+  }, [currents.u, currents.v])
+
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
         transparent: true,
         side: THREE.DoubleSide,
         depthWrite: false,
-        uniforms: { time: { value: 0 } },
+        uniforms: {
+          time: { value: 0 },
+          uCurrentDir: { value: currentDir },
+          uSpeed: { value: currents.speed },
+        },
         vertexShader: `
           uniform float time;
+          uniform vec2 uCurrentDir;
+          uniform float uSpeed;
           varying vec2 vUv;
           varying vec3 vWorldPos;
+          varying vec3 vNormalWorld;
+          varying float vWaveHeight;
+
           void main() {
             vUv = uv;
             vec3 p = position;
-            p.z += sin(p.x * 0.08 + time * 0.8) * 0.22;
-            p.y += sin(p.x * 0.06 + p.z * 0.08 + time) * 0.16;
+
+            // Current-driven directional wave vectors
+            vec2 dir = length(uCurrentDir) > 0.01 ? normalize(uCurrentDir) : vec2(0.85, 0.35);
+            vec2 crossDir = vec2(-dir.y, dir.x);
+            float spd = max(0.35, uSpeed * 1.6);
+
+            // 1. Primary current swell (wavelength ~22m) traveling along current direction
+            float phase1 = dot(p.xy, dir) * 0.10 - time * spd * 1.1;
+            float w1 = sin(phase1) * 0.28;
+
+            // 2. Cross-chop wave interference (wavelength ~9m)
+            float phase2 = dot(p.xy, crossDir * 0.8 + dir * 0.4) * 0.24 - time * 1.35;
+            float w2 = sin(phase2) * 0.14;
+
+            // 3. High-frequency capillary ripples (wavelength ~1.8m)
+            float phase3 = dot(p.xy, dir * 1.4 - crossDir * 0.7) * 0.65 - time * 2.4;
+            float w3 = sin(phase3) * 0.05;
+
+            float totalWave = w1 + w2 + w3;
+            p.z += totalWave;
+            vWaveHeight = totalWave;
+
+            // Analytical normal perturbation from Gerstner partial derivatives
+            float dw_dx = cos(phase1) * 0.28 * dir.x * 0.10 + cos(phase2) * 0.14 * (crossDir.x * 0.8 + dir.x * 0.4) * 0.24;
+            float dw_dy = cos(phase1) * 0.28 * dir.y * 0.10 + cos(phase2) * 0.14 * (crossDir.y * 0.8 + dir.y * 0.4) * 0.24;
+            vec3 nLocal = normalize(vec3(-dw_dx, -dw_dy, 1.0));
+
+            // Transform into world space (mesh has rotation [-PI/2, 0, 0])
             vec4 wp = modelMatrix * vec4(p, 1.0);
             vWorldPos = wp.xyz;
+            mat3 nMatrix = mat3(modelMatrix);
+            vNormalWorld = normalize(nMatrix * nLocal);
+
             gl_Position = projectionMatrix * viewMatrix * wp;
           }
         `,
         fragmentShader: `
           uniform float time;
+          uniform vec2 uCurrentDir;
+          uniform float uSpeed;
           varying vec2 vUv;
           varying vec3 vWorldPos;
+          varying vec3 vNormalWorld;
+          varying float vWaveHeight;
+
+          // Hash function for procedural water noise
+          float hash21(vec2 p) {
+            p = fract(p * vec2(123.34, 456.21));
+            p += dot(p, p + 45.32);
+            return fract(p.x * p.y);
+          }
+
+          float waterNoise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash21(i);
+            float b = hash21(i + vec2(1.0, 0.0));
+            float c = hash21(i + vec2(0.0, 1.0));
+            float d = hash21(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+          }
+
           void main() {
-            float waves = sin(vWorldPos.x * 0.35 + time * 1.1) * cos(vWorldPos.z * 0.35 - time * 0.85);
-            float caustics = sin(vUv.x * 120.0 + sin(vUv.y * 70.0 + time)) * 0.5 + 0.5;
-            vec3 deepColor = vec3(0.02, 0.22, 0.36);
-            vec3 crestColor = vec3(0.12, 0.65, 0.82);
-            vec3 col = mix(deepColor, crestColor, waves * 0.5 + 0.5) + caustics * 0.14;
-            gl_FragColor = vec4(col, 0.52);
+            vec2 dir = length(uCurrentDir) > 0.01 ? normalize(uCurrentDir) : vec2(0.85, 0.35);
+            vec3 N = normalize(vNormalWorld);
+            vec3 V = normalize(cameraPosition - vWorldPos);
+
+            // True double-sided orientation: correct normal for viewer side
+            bool isAbove = cameraPosition.y >= 0.0;
+            if (!isAbove) N = -N;
+
+            // Physical Fresnel reflection (Schlick's approximation)
+            float NdotV = max(0.0, dot(N, V));
+            float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 4.5);
+
+            // Drifting current ripples & streaks oriented along local current vector
+            vec2 driftUv = vWorldPos.xz * 0.35 + dir * time * (0.24 + uSpeed * 0.40);
+            float n1 = waterNoise(driftUv * 3.2);
+            float n2 = waterNoise(driftUv * 6.5 - dir * time * 0.35);
+            float causticRipples = n1 * 0.6 + n2 * 0.4;
+
+            // Current streaks / windrows (elongated fluid lines flowing along current direction)
+            vec2 crossDir = vec2(-dir.y, dir.x);
+            float streakCoord = dot(vWorldPos.xz, crossDir) * 0.45;
+            float streakFlow = dot(vWorldPos.xz, dir) * 0.20 - time * (0.35 + uSpeed * 0.75);
+            float currentStreak = pow(sin(streakCoord + sin(streakFlow * 0.5) * 1.5) * 0.5 + 0.5, 4.0) * 0.35;
+
+            // Specular sun glint (sun position overhead)
+            vec3 L = normalize(vec3(0.35, 0.90, 0.38));
+            vec3 H = normalize(L + V);
+            float NdotH = max(0.0, dot(N, H));
+            float sunGlint = pow(NdotH, 128.0) * 2.2;
+
+            // Wave crest foam (forms where wave height peaks and capillary noise is sharp)
+            float foam = smoothstep(0.22, 0.42, vWaveHeight + (causticRipples - 0.5) * 0.16 + currentStreak * 0.12);
+
+            // Natural marine water color palette
+            vec3 deepWater = vec3(0.012, 0.13, 0.25);   // Oceanic body
+            vec3 shallowCrest = vec3(0.05, 0.52, 0.68); // Translucent turquoise crest
+            vec3 foamColor = vec3(0.95, 0.98, 1.0);     // Crisp white ocean spray
+            vec3 skyReflect = vec3(0.55, 0.85, 0.98);   // Marine sky reflection
+
+            // Color synthesis
+            vec3 waterColor = mix(deepWater, shallowCrest, clamp(vWaveHeight * 1.5 + 0.5, 0.0, 1.0));
+            waterColor = mix(waterColor, skyReflect, fresnel * 0.70);
+            waterColor += vec3(1.0, 0.98, 0.90) * sunGlint; // Sunlight glint
+            waterColor = mix(waterColor, foamColor, foam * 0.75); // Foam crests & streaks
+
+            // FRESNEL TRANSPARENCY:
+            // Looking straight down into the water: opacity is ONLY 0.16 to 0.20!
+            // -> Allows the user to clearly see the golden ocean bed and bathymetry through the water!
+            // Looking towards the horizon: opacity rises smoothly to 0.80 with sky reflection and waves.
+            float alpha = isAbove
+              ? mix(0.16, 0.80, fresnel) + foam * 0.32
+              : mix(0.24, 0.70, fresnel);
+
+            gl_FragColor = vec4(waterColor, clamp(alpha, 0.12, 0.92));
           }
         `,
       }),
-    []
+    [currentDir, currents.speed]
   )
 
   useFrame(({ clock }) => {
     material.uniforms.time.value = clock.getElapsedTime()
+    material.uniforms.uCurrentDir.value = currentDir
+    material.uniforms.uSpeed.value = currents.speed
   })
 
   return (
     <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} material={material}>
-      <planeGeometry args={[320, 320, 64, 64]} />
+      <planeGeometry args={[320, 320, 72, 72]} />
     </mesh>
   )
 }
@@ -763,6 +1014,8 @@ function Diver({
   const euler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'))
 
   useEffect(() => {
+    camera.position.set(0, 10, 52)
+    camera.lookAt(new THREE.Vector3(0, -2, 0))
     euler.current.setFromQuaternion(camera.quaternion)
     const dom = gl.domElement
 
@@ -1047,6 +1300,9 @@ function ThermalField({
             for (int i = 0; i < STEPS; i++) {
               float fi = (float(i) + 0.5) / float(STEPS);
               vec3 p = rayDirection * rayLength * fi;
+              // Strictly restrict thermal stratification raymarching to underwater (below sea level)
+              if (cameraPosition.y + p.y > 0.0) continue;
+
               float localDepth = max(0.0, currentDepth - p.y * 92.0);
               float normalizedDepth = clamp(localDepth / 5000.0, 0.0, 1.0);
 
@@ -1087,6 +1343,100 @@ function ThermalField({
   )
 }
 
+/**
+ * Natural Oceanic Marine Sky Dome.
+ * Renders an atmospheric sunlit sky dome over the ocean (Y >= 0),
+ * transitioning into marine haze at the horizon and deep azure blue at the zenith.
+ */
+function SkyDome() {
+  const material = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        uniforms: {
+          uSunPos: { value: new THREE.Vector3(70, 150, 50).normalize() },
+        },
+        vertexShader: `
+          varying vec3 vWorldPos;
+          void main() {
+            vec4 wp = modelMatrix * vec4(position, 1.0);
+            vWorldPos = wp.xyz;
+            gl_Position = projectionMatrix * viewMatrix * wp;
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 uSunPos;
+          varying vec3 vWorldPos;
+          void main() {
+            vec3 dir = normalize(vWorldPos);
+            float h = clamp(dir.y, 0.0, 1.0);
+
+            // Natural marine sky gradient
+            vec3 horizonColor = vec3(0.70, 0.86, 0.95); // Soft oceanic horizon haze
+            vec3 zenithColor = vec3(0.07, 0.40, 0.76);  // Deep azure zenith
+            vec3 sky = mix(horizonColor, zenithColor, pow(h, 0.62));
+
+            // Radiant sun disk & solar flare
+            float sunDot = max(0.0, dot(dir, uSunPos));
+            float sunDisk = smoothstep(0.9982, 0.9998, sunDot);
+            float sunGlow = pow(sunDot, 48.0) * 0.40 + pow(sunDot, 6.0) * 0.18;
+            vec3 sunColor = vec3(1.0, 0.96, 0.86);
+
+            sky = mix(sky, sunColor, sunGlow);
+            sky += sunColor * sunDisk * 2.2;
+
+            // Fade out below sea level so underwater fog takes over seamlessly
+            float seaAlpha = smoothstep(-0.04, 0.06, dir.y);
+            gl_FragColor = vec4(sky, seaAlpha);
+          }
+        `,
+      }),
+    []
+  )
+
+  return (
+    <mesh position={[0, 0, 0]} material={material}>
+      <sphereGeometry args={[420, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.52]} />
+    </mesh>
+  )
+}
+
+/**
+ * Active Sonar & Exploration Floodlight.
+ * Dynamically tracks camera position and direction in real-time,
+ * brilliantly illuminating the ocean bed, bathymetric contours, and fish schools.
+ */
+function DiverHeadlight() {
+  const lightRef = useRef<THREE.SpotLight>(null)
+  const targetRef = useRef<THREE.Object3D>(null)
+  const { camera } = useThree()
+
+  useFrame(() => {
+    if (!lightRef.current || !targetRef.current) return
+    lightRef.current.position.copy(camera.position)
+    const forward = new THREE.Vector3()
+    camera.getWorldDirection(forward)
+    targetRef.current.position.copy(camera.position).addScaledVector(forward, 45)
+  })
+
+  return (
+    <>
+      <object3D ref={targetRef} />
+      <spotLight
+        ref={lightRef}
+        target={targetRef.current ?? undefined}
+        intensity={8.5}
+        distance={280}
+        angle={Math.PI / 2.8}
+        penumbra={0.65}
+        decay={1.1}
+        color="#c8f5ff"
+      />
+    </>
+  )
+}
+
 function DiveWorld({
   variable,
   selection,
@@ -1096,7 +1446,7 @@ function DiveWorld({
   onExit,
 }: Props) {
   // Mutable diver position reference for ZERO-overhead 60 FPS fish interaction
-  const diverPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 8, 65))
+  const diverPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 10, 52))
 
   const profile = useMemo(
     () => getRegionalDiveProfile(selection.latitude, selection.longitude, timeIndex),
@@ -1123,30 +1473,37 @@ function DiveWorld({
 
   return (
     <>
+      <SkyDome />
       <color attach="background" args={[profile.fogColor]} />
-      <fog attach="fog" args={[profile.fogColor, 35, 360]} />
+      <fog attach="fog" args={[profile.fogColor, 40, 360]} />
 
       <ambientLight
-        intensity={1.65}
+        intensity={2.6}
         color={profile.ambientColor}
       />
 
       <directionalLight
-        position={[0, 17, 20]}
-        intensity={4.5}
+        position={[50, 100, 40]}
+        intensity={5.8}
+        color="#fffaf0"
+      />
+
+      <directionalLight
+        position={[-40, 45, -30]}
+        intensity={2.2}
         color="#b9fbff"
       />
 
-      <pointLight
-        position={[0, -4, 2]}
-        intensity={2.4}
-        color={profile.ambientColor}
-        distance={75}
+      {/* Dynamic Sonar & Diver Exploration Spotlight */}
+      <DiverHeadlight />
+
+      <OceanSurface currents={{ u: telemetry.currentU, v: telemetry.currentV, speed: telemetry.currentSpeed }} />
+
+      <Terrain
+        selection={selection}
+        boundary={boundary}
+        currents={{ u: telemetry.currentU, v: telemetry.currentV, speed: telemetry.currentSpeed }}
       />
-
-      <OceanSurface />
-
-      <Terrain selection={selection} boundary={boundary} />
 
       <RegionalSeabedFeatures profile={profile} selection={selection} />
 
@@ -1195,7 +1552,7 @@ function DiveWorld({
 export default function ImmersiveOcean(props: Props) {
   return (
     <Canvas
-      camera={{ position: [0, 8, 65], fov: 64, near: 0.1, far: 500 }}
+      camera={{ position: [0, 10, 52], fov: 62, near: 0.1, far: 500 }}
       dpr={[1, 1.5]}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
     >

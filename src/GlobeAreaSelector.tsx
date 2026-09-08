@@ -147,12 +147,12 @@ export default function GlobeAreaSelector({
         cornerPositions.map((c) => (
           <group key={c.id} position={c.pos}>
             <mesh>
-              <sphereGeometry args={[0.016, 12, 12]} />
+              <sphereGeometry args={[0.0055, 12, 12]} />
               <meshBasicMaterial color="#00f0ff" />
             </mesh>
-            <mesh scale={2.4}>
-              <ringGeometry args={[0.012, 0.018, 16]} />
-              <meshBasicMaterial color="#00e5ff" transparent opacity={0.55} side={THREE.DoubleSide} />
+            <mesh scale={1.2}>
+              <ringGeometry args={[0.007, 0.010, 16]} />
+              <meshBasicMaterial color="#00e5ff" transparent opacity={0.65} side={THREE.DoubleSide} />
             </mesh>
           </group>
         ))}
