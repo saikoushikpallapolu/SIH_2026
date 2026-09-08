@@ -1045,8 +1045,17 @@ export default function App() {
               </span>
             </div>
             <div className="dive-depth-big">
-              {diveTelemetry.depth}
-              <small>m</small>
+              {diveTelemetry.depth === 0 ? (
+                <>
+                  <span style={{ fontSize: '0.62em', letterSpacing: '0.04em' }}>SURFACE</span>
+                  <small style={{ fontSize: '0.45em', marginLeft: '6px' }}>0m</small>
+                </>
+              ) : (
+                <>
+                  {diveTelemetry.depth}
+                  <small>m</small>
+                </>
+              )}
             </div>
             <div className="dive-hud-metrics-row">
               <div className="dive-chip">
@@ -1084,7 +1093,7 @@ export default function App() {
           <div className="dive-controls-hint glass">
             <Compass size={13} />
             <span>
-              Use <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to swim · <kbd>↑</kbd> <kbd>↓</kbd> for depth · Click & drag water to look
+              <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move · <kbd>↑</kbd>/<kbd>Space</kbd> Ascend into Air · <kbd>↓</kbd>/<kbd>C</kbd> Dive · Drag to Look 360° · <kbd>Shift</kbd> Turbo
             </span>
           </div>
 

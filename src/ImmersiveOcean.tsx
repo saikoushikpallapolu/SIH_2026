@@ -91,27 +91,29 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
         const idx = r * res + c
         const elev = elevGrid ? elevGrid[idx] : -1200
 
-        let py = -18.0
+        let py = 0.0
         if (elev >= 0) {
           // Authentic Land Elevation Relief (Western Ghats peaks, coastal hills)
+          // Sea level is Y = 0.0. Land rises above sea level into open air.
           const landRatio = Math.min(1.0, elev / 1800.0)
-          py = -18.0 + landRatio * 24.0 // rises up towards water surface/peaks
+          py = landRatio * 24.0 // rises from 0 at shoreline up to +24 at mountain summits
           
           // Hypsometric Land Shading
           if (elev < 80) {
-            color.setRGB(0.20, 0.58, 0.28) // Coastal lowlands
+            color.setRGB(0.20, 0.58, 0.28) // Coastal lowlands / verdant plains
           } else if (elev < 400) {
-            color.setRGB(0.48, 0.54, 0.26) // Foothills & plains
+            color.setRGB(0.48, 0.54, 0.26) // Foothills & interior plateau
           } else if (elev < 1200) {
             color.setRGB(0.64, 0.50, 0.26) // Western Ghats / ridges
           } else {
-            color.setRGB(0.75, 0.65, 0.52) // Mountain peaks
+            color.setRGB(0.75, 0.65, 0.52) // Mountain summits & high crags
           }
         } else {
           // Authentic Ocean Bathymetry Relief
+          // Sea level is Y = 0.0. Ocean seabed drops below sea level.
           const depth = -elev
           const depthRatio = Math.min(1.0, depth / 4500.0)
-          py = -18.0 - depthRatio * 14.0 // drops down to seabed
+          py = -depthRatio * 25.0 // drops from 0 at shoreline down to -25 on abyssal plain
           
           // Bathymetric cmocean Shading
           if (depth < 200) {
@@ -152,7 +154,7 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
     tGeom.computeVertexNormals()
 
     // Framing Skirt Side Walls
-    const baseFloorY = -38.0
+    const baseFloorY = -36.0
     const skirtPos: number[] = []
     const skirtColors: number[] = []
 
@@ -194,37 +196,64 @@ function Terrain({ selection, boundary }: { selection: Selection; boundary?: Spa
       const { min_lat: minLat, max_lat: maxLat, min_lon: minLon, max_lon: maxLon } = terrainData.bounds
       const grid = terrainData.elevation_grid
 
-      const buildSegments = (segs: [number, number][][], isoElev: number) => {
-        const pts: number[] = []
+      const allContourPts: number[] = []
+      const addContourList = (segs: [number, number][][], isoElev: number) => {
         for (const [p1, p2] of segs) {
           const u1 = (p1[1] - minLon) / (maxLon - minLon)
           const v1 = (p1[0] - minLat) / (maxLat - minLat)
           const x1 = (u1 - 0.5) * size
           const z1 = (0.5 - v1) * size
-          const y1 = isoElev >= 0 ? -18.0 + Math.min(1.0, isoElev / 1800.0) * 24.0 + 0.12 : -18.0 - Math.min(1.0, -isoElev / 4500.0) * 14.0 + 0.12
+          const y1 = isoElev >= 0 
+            ? Math.min(1.0, isoElev / 1800.0) * 24.0 + 0.18 
+            : -Math.min(1.0, -isoElev / 4500.0) * 25.0 + 0.18
 
           const u2 = (p2[1] - minLon) / (maxLon - minLon)
           const v2 = (p2[0] - minLat) / (maxLat - minLat)
           const x2 = (u2 - 0.5) * size
           const z2 = (0.5 - v2) * size
-          const y2 = isoElev >= 0 ? -18.0 + Math.min(1.0, isoElev / 1800.0) * 24.0 + 0.12 : -18.0 - Math.min(1.0, -isoElev / 4500.0) * 14.0 + 0.12
+          const y2 = isoElev >= 0 
+            ? Math.min(1.0, isoElev / 1800.0) * 24.0 + 0.18 
+            : -Math.min(1.0, -isoElev / 4500.0) * 25.0 + 0.18
 
-          pts.push(x1, y1, z1, x2, y2, z2)
+          allContourPts.push(x1, y1, z1, x2, y2, z2)
         }
-        const g = new THREE.BufferGeometry()
-        g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3))
-        return g
       }
 
-      // Coastline (Z = 0)
+      // 1. Vector Coastline Shoreline (Z = 0 contour)
       const coastSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, 0)
-      if (coastSegs.length > 0) cGeom = buildSegments(coastSegs, 0)
+      if (coastSegs.length > 0) {
+        const cPts: number[] = []
+        for (const [p1, p2] of coastSegs) {
+          const u1 = (p1[1] - minLon) / (maxLon - minLon)
+          const v1 = (p1[0] - minLat) / (maxLat - minLat)
+          const x1 = (u1 - 0.5) * size
+          const z1 = (0.5 - v1) * size
+          const u2 = (p2[1] - minLon) / (maxLon - minLon)
+          const v2 = (p2[0] - minLat) / (maxLat - minLat)
+          const x2 = (u2 - 0.5) * size
+          const z2 = (0.5 - v2) * size
+          cPts.push(x1, 0.22, z1, x2, 0.22, z2)
+        }
+        cGeom = new THREE.BufferGeometry()
+        cGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cPts), 3))
+      }
 
-      // Topo & Bathy Contours (e.g. 150m and -200m shelf break)
+      // 2. Bathymetric isobaths (-200m shelf break, -1000m slope)
       const shelfSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, -200)
-      const topoSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, 250)
-      const combined = [...shelfSegs, ...topoSegs]
-      if (combined.length > 0) contGeom = buildSegments(combined, 100)
+      addContourList(shelfSegs, -200)
+      const deepSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, -1000)
+      addContourList(deepSegs, -1000)
+
+      // 3. Topographic isohypses (+150m lowlands, +500m Western Ghats ridge)
+      const topo150 = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, 150)
+      addContourList(topo150, 150)
+      const topo500 = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, 500)
+      addContourList(topo500, 500)
+
+      if (allContourPts.length > 0) {
+        contGeom = new THREE.BufferGeometry()
+        contGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(allContourPts), 3))
+      }
     }
 
     return { terrainGeometry: tGeom, skirtGeometry: sGeom, coastlineGeom: cGeom, contourGeom: contGeom }
@@ -270,20 +299,28 @@ function OceanSurface() {
         vertexShader: `
           uniform float time;
           varying vec2 vUv;
+          varying vec3 vWorldPos;
           void main() {
             vUv = uv;
             vec3 p = position;
-            p.z += sin(p.x * 0.08 + time * 0.8) * 0.35;
-            p.y += sin(p.x * 0.06 + p.z * 0.08 + time) * 0.22;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+            p.z += sin(p.x * 0.08 + time * 0.8) * 0.22;
+            p.y += sin(p.x * 0.06 + p.z * 0.08 + time) * 0.16;
+            vec4 wp = modelMatrix * vec4(p, 1.0);
+            vWorldPos = wp.xyz;
+            gl_Position = projectionMatrix * viewMatrix * wp;
           }
         `,
         fragmentShader: `
+          uniform float time;
           varying vec2 vUv;
+          varying vec3 vWorldPos;
           void main() {
-            float lines = sin(vUv.x * 140.0) * 0.5 + 0.5;
-            vec3 c = mix(vec3(0.01, 0.15, 0.22), vec3(0.08, 0.54, 0.68), vUv.y) * (0.7 + lines * 0.12);
-            gl_FragColor = vec4(c, 0.48);
+            float waves = sin(vWorldPos.x * 0.35 + time * 1.1) * cos(vWorldPos.z * 0.35 - time * 0.85);
+            float caustics = sin(vUv.x * 120.0 + sin(vUv.y * 70.0 + time)) * 0.5 + 0.5;
+            vec3 deepColor = vec3(0.02, 0.22, 0.36);
+            vec3 crestColor = vec3(0.12, 0.65, 0.82);
+            vec3 col = mix(deepColor, crestColor, waves * 0.5 + 0.5) + caustics * 0.14;
+            gl_FragColor = vec4(col, 0.52);
           }
         `,
       }),
@@ -295,8 +332,8 @@ function OceanSurface() {
   })
 
   return (
-    <mesh position={[0, 8, 0]} rotation={[-Math.PI / 2, 0, 0]} material={material}>
-      <planeGeometry args={[300, 300, 48, 48]} />
+    <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} material={material}>
+      <planeGeometry args={[320, 320, 64, 64]} />
     </mesh>
   )
 }
@@ -307,14 +344,14 @@ function WaterParticles() {
     const data = new Float32Array(800 * 3)
     for (let i = 0; i < 800; i += 1) {
       data[i * 3] = ((i * 37) % 220) - 110
-      data[i * 3 + 1] = ((i * 73) % 45) - 34
+      data[i * 3 + 1] = -0.5 - ((i * 73) % 25)
       data[i * 3 + 2] = ((i * 97) % 220) - 110
     }
     return data
   }, [])
 
   useFrame(({ clock }) => {
-    if (ref.current) ref.current.position.y = Math.sin(clock.getElapsedTime() * 0.12) * 0.6
+    if (ref.current) ref.current.position.y = Math.sin(clock.getElapsedTime() * 0.12) * 0.4
   })
 
   return (
@@ -509,6 +546,9 @@ function FishSchools({
         forwardZ = Math.cos(angle)
       }
 
+      // Keep fish submerged beneath the water surface (<= -0.8m)
+      y = Math.min(-0.8, y)
+
       // Zero-allocation diver repulsion
       if (diverPos) {
         const dx = x - diverX
@@ -597,7 +637,8 @@ function PhytoplanktonBloom({ chlorophyll }: { chlorophyll: number }) {
     const ph = new Float32Array(BLOOM_PARTICLE_COUNT)
     for (let i = 0; i < BLOOM_PARTICLE_COUNT; i++) {
       pos[i * 3 + 0] = (Math.random() - 0.5) * 110
-      pos[i * 3 + 1] = -16.0 + Math.random() * 24.0
+      // Submerged in water column beneath sea level
+      pos[i * 3 + 1] = -22.0 + Math.random() * 21.0
       pos[i * 3 + 2] = (Math.random() - 0.5) * 110
       sc[i] = 0.5 + Math.random() * 1.2
       ph[i] = Math.random() * Math.PI * 2.0
@@ -675,7 +716,7 @@ function RegionalSeabedFeatures({ profile }: { profile: RegionalDiveProfile; sel
       {profile.terrainType === 'mid_ocean_ridge' && (
         <group>
           {[-15, 0, 18].map((x, i) => (
-            <group key={i} position={[x, -16.5, -20 + i * 14]}>
+            <group key={i} position={[x, -21.0, -20 + i * 14]}>
               <pointLight color="#f97316" intensity={3.5} distance={22} />
               <mesh>
                 <coneGeometry args={[1.4, 4.5, 8]} />
@@ -688,7 +729,7 @@ function RegionalSeabedFeatures({ profile }: { profile: RegionalDiveProfile; sel
 
       {profile.terrainType === 'coral_atoll' && (
         <group>
-          {[[-20, -18, -15], [30, -22, 25], [-10, -20, 35]].map((p, i) => (
+          {[[-20, -21, -15], [30, -23, 25], [-10, -20, 35]].map((p, i) => (
             <group key={i} position={p as [number, number, number]}>
               <pointLight color="#06b6d4" intensity={2.2} distance={25} />
               <mesh>
@@ -714,9 +755,52 @@ function Diver({
   diverPosRef: React.RefObject<THREE.Vector3>
   onTelemetry: (telemetry: DiveTelemetry) => void
 }) {
-  const { camera } = useThree()
+  const { camera, gl } = useThree()
   const keys = useRef<Record<string, boolean>>({})
   const lastTelemetry = useRef(0)
+  const isDragging = useRef(false)
+  const prevMouse = useRef({ x: 0, y: 0 })
+  const euler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'))
+
+  useEffect(() => {
+    euler.current.setFromQuaternion(camera.quaternion)
+    const dom = gl.domElement
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 0) {
+        isDragging.current = true
+        prevMouse.current = { x: e.clientX, y: e.clientY }
+      }
+    }
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return
+      // If pointer is locked by PointerLockControls, let PointerLockControls rotate
+      if (document.pointerLockElement) return
+      const dx = e.clientX - prevMouse.current.x
+      const dy = e.clientY - prevMouse.current.y
+      prevMouse.current = { x: e.clientX, y: e.clientY }
+
+      euler.current.y -= dx * 0.0032
+      euler.current.x = THREE.MathUtils.clamp(
+        euler.current.x - dy * 0.0032,
+        -Math.PI / 2.1,
+        Math.PI / 2.1
+      )
+      camera.quaternion.setFromEuler(euler.current)
+    }
+    const onMouseUp = () => {
+      isDragging.current = false
+    }
+
+    dom.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      dom.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [camera, gl])
 
   useEffect(() => {
     const update = (event: KeyboardEvent, state: boolean) => {
@@ -733,7 +817,7 @@ function Diver({
   }, [])
 
   useFrame((state, delta) => {
-    const speed = keys.current.shift ? 18 : 9
+    const speed = keys.current.shift ? 28 : 14
     const forward = new THREE.Vector3()
     camera.getWorldDirection(forward)
     forward.y = 0
@@ -744,12 +828,17 @@ function Diver({
     if (keys.current.s) camera.position.addScaledVector(forward, -speed * delta)
     if (keys.current.a) camera.position.addScaledVector(right, -speed * delta)
     if (keys.current.d) camera.position.addScaledVector(right, speed * delta)
-    if (keys.current.arrowup) camera.position.y += speed * delta
-    if (keys.current.arrowdown) camera.position.y -= speed * delta
+
+    // Vertical controls: ascend into the air or descend into depths - NO CEILING!
+    const ascend = keys.current.arrowup || keys.current[' '] || keys.current.space || keys.current.e
+    const descend = keys.current.arrowdown || keys.current.c || keys.current.q
+    if (ascend) camera.position.y += speed * delta
+    if (descend) camera.position.y -= speed * delta
 
     camera.position.x = THREE.MathUtils.clamp(camera.position.x, -worldLimit, worldLimit)
     camera.position.z = THREE.MathUtils.clamp(camera.position.z, -worldLimit, worldLimit)
-    camera.position.y = THREE.MathUtils.clamp(camera.position.y, -17, 7.5)
+    // No surface ceiling! Camera can dive down to seabed (-32m) or ascend high into sky (+75m)
+    camera.position.y = THREE.MathUtils.clamp(camera.position.y, -32.0, 75.0)
 
     // Direct mutable reference update with ZERO React re-renders!
     if (diverPosRef.current) {
@@ -760,7 +849,12 @@ function Diver({
     if (state.clock.elapsedTime - lastTelemetry.current > 0.35) {
       lastTelemetry.current = state.clock.elapsedTime
       const profile = getRegionalDiveProfile(selection.latitude, selection.longitude, timeIndex)
-      const depth = Math.round(Math.max(0, 8 - camera.position.y) * (profile.seabedDepth / 22.0))
+      
+      // When underwater (y <= 0), compute depth in meters down to seabedDepth.
+      // When above water (y > 0), depth is 0 (aerial exploration).
+      const depth = camera.position.y <= 0
+        ? Math.round((-camera.position.y) * (profile.seabedDepth / 25.0))
+        : 0
 
       const localData = getSubgridLocalEstimate(selection.latitude, selection.longitude, depth, timeIndex * 25)
       onTelemetry({
@@ -1002,7 +1096,7 @@ function DiveWorld({
   onExit,
 }: Props) {
   // Mutable diver position reference for ZERO-overhead 60 FPS fish interaction
-  const diverPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 3, 55))
+  const diverPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 8, 65))
 
   const profile = useMemo(
     () => getRegionalDiveProfile(selection.latitude, selection.longitude, timeIndex),
@@ -1010,7 +1104,7 @@ function DiveWorld({
   )
 
   const [telemetry, setTelemetry] = useState<DiveTelemetry>(() => ({
-    depth: 24,
+    depth: 0,
     temperature: 28.5,
     salinity: 35.2,
     chlorophyll: profile.chlorophyll,
@@ -1030,7 +1124,7 @@ function DiveWorld({
   return (
     <>
       <color attach="background" args={[profile.fogColor]} />
-      <fog attach="fog" args={[profile.fogColor, 14, 155]} />
+      <fog attach="fog" args={[profile.fogColor, 35, 360]} />
 
       <ambientLight
         intensity={1.65}
@@ -1101,7 +1195,7 @@ function DiveWorld({
 export default function ImmersiveOcean(props: Props) {
   return (
     <Canvas
-      camera={{ position: [0, 3, 55], fov: 64, near: 0.1, far: 400 }}
+      camera={{ position: [0, 8, 65], fov: 64, near: 0.1, far: 500 }}
       dpr={[1, 1.5]}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
     >
