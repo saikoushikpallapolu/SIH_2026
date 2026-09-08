@@ -1,0 +1,58 @@
+[
+  {
+    "id": "bgc_incois_2902201",
+    "name": "Somali Coastal Upwelling Float",
+    "latitude": 9.2,
+    "longitude": 52.4,
+    "surface_chl_mg_m3": 3.25,
+    "dcm_depth": 35
+  },
+  {
+    "id": "bgc_incois_2902204",
+    "name": "Malabar Shelf Pelagic Float",
+    "latitude": 11.8,
+    "longitude": 74.8,
+    "surface_chl_mg_m3": 2.15,
+    "dcm_depth": 25
+  },
+  {
+    "id": "bgc_incois_5906532",
+    "name": "Ganges Delta Riverine Plume Float",
+    "latitude": 19.5,
+    "longitude": 88.6,
+    "surface_chl_mg_m3": 2.4,
+    "dcm_depth": 18
+  },
+  {
+    "id": "bgc_incois_2902198",
+    "name": "Sri Lanka Cetacean Dome Float",
+    "latitude": 6.2,
+    "longitude": 80.8,
+    "surface_chl_mg_m3": 1.95,
+    "dcm_depth": 45
+  },
+  {
+    "id": "bgc_incois_2902199",
+    "name": "Arabian Sea Central Gyre Float",
+    "latitude": 16.5,
+    "longitude": 64.2,
+    "surface_chl_mg_m3": 0.45,
+    "dcm_depth": 75
+  },
+  {
+    "id": "bgc_incois_5906540",
+    "name": "Equatorial Wyrtki Jet Float",
+    "latitude": 0.0,
+    "longitude": 78.5,
+    "surface_chl_mg_m3": 0.35,
+    "dcm_depth": 90
+  },
+  {
+    "id": "bgc_incois_2902205",
+    "name": "Agulhas Current Vortex Float",
+    "latitude": -32.5,
+    "longitude": 32.8,
+    "surface_chl_mg_m3": 1.65,
+    "dcm_depth": 50
+  }
+]

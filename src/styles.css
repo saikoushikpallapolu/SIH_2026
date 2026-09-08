@@ -1574,3 +1574,354 @@ button {
   color: #cddc39;
 }
 
+/* ==========================================================================
+   MARINE BIOMASS & PRIMARY PRODUCTIVITY TELEMETRY
+   ========================================================================== */
+.biomass-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  color: #34d399;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  margin-left: 6px;
+}
+
+.metric-box.biomass-box {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.metric-box.biomass-box span {
+  color: #34d399;
+}
+
+.metric-box.biomass-box strong {
+  color: #6ee7b7;
+}
+
+/* ==========================================================================
+   ENHANCED OCEAN DIVE HUD
+   ========================================================================== */
+.dive-hud-clean {
+  position: absolute;
+  top: 80px;
+  left: 24px;
+  padding: 16px;
+  border-radius: 14px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.dive-hud-metrics-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dive-chip {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.dive-chip span {
+  font-size: 8px;
+  font-family: 'DM Mono', monospace;
+  color: var(--text-muted);
+}
+
+.dive-chip b {
+  color: #ffffff;
+  font-family: 'DM Mono', monospace;
+}
+
+.dive-chip.chl {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.dive-chip.chl b {
+  color: #34d399;
+}
+
+.dive-biomass-panel {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.biomass-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.biomass-state-text {
+  font-size: 11px;
+  font-weight: 800;
+  color: #34d399;
+  letter-spacing: 0.3px;
+}
+
+.biomass-fish-count {
+  font-size: 11px;
+  font-family: 'DM Mono', monospace;
+  color: #a7f3d0;
+}
+
+.biomass-subtext {
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  color: #94b9c9;
+}
+
+.biomass-subtext b {
+  color: #ffffff;
+}
+
+.pulse.emerald {
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+
+.pulse.green {
+  background: #34d399;
+  box-shadow: 0 0 8px #34d399;
+}
+
+/* ==========================================================================
+   HOTSPOTS & BIOMES DRAWER
+   ========================================================================== */
+.hotspots-drawer {
+  position: absolute;
+  top: 80px;
+  right: 24px;
+  bottom: 30px;
+  width: 440px;
+  max-width: calc(100vw - 48px);
+  border-radius: 16px;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  animation: slideInRight 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.hotspots-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.hotspots-header .title-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.hotspots-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.hotspots-header span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.hotspot-filter-pills {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  scrollbar-width: thin;
+}
+
+.filter-pill {
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+
+.filter-pill:hover {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.filter-pill.active {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(6, 182, 212, 0.28));
+  border-color: #10b981;
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
+}
+
+.hotspots-scroll-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.hotspot-card {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(4, 18, 30, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hotspot-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(6, 28, 46, 0.85);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.hotspot-card.active {
+  border-color: #10b981;
+  background: rgba(8, 38, 48, 0.9);
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.25);
+}
+
+.hotspot-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.hotspot-name-block h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.hotspot-name-block p {
+  margin: 2px 0 0;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.hotspot-category-badge {
+  font-size: 9px;
+  font-family: 'DM Mono', monospace;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.hotspot-description {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.hotspot-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.hotspot-geo-tag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  color: var(--text-muted);
+}
+
+.hotspot-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.hotspot-fly-btn, .hotspot-dive-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.hotspot-fly-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-primary);
+}
+
+.hotspot-fly-btn:hover {
+  background: rgba(0, 242, 254, 0.2);
+  border-color: #00f2fe;
+  color: #00f2fe;
+}
+
+.hotspot-dive-btn {
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid rgba(16, 185, 129, 0.5);
+  color: #34d399;
+}
+
+.hotspot-dive-btn:hover {
+  background: #10b981;
+  color: #031826;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
+}
+
+

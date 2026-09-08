@@ -263,6 +263,34 @@ def subgrid_telemetry(
     current_depth_temp = interpolate_depth(temp_profile, depth)
     current_depth_sal = interpolate_depth(sal_profile, depth)
 
+    # Compute marine biomass and fish schooling index
+    photic_factor = float(np.exp(-max(0.0, depth) / 160.0))
+    effective_chl = chlorophyll * photic_factor if not is_land else 0.0
+    primary_prod = round(chlorophyll * 480.0, 1) if not is_land else 0.0
+    density_idx = min(100, int(round(effective_chl * 58))) if not is_land else 0
+
+    if effective_chl > 1.2:
+        activity = "Feeding Frenzy"
+        density_label = "Hyper-Productive Fishery (Feeding Frenzy)"
+        fish_count = min(850, int(round(520 + effective_chl * 260)))
+    elif effective_chl > 0.65:
+        activity = "Swarming Baitball"
+        density_label = "High Biomass Swarming Baitball"
+        fish_count = min(480, int(round(240 + effective_chl * 220)))
+    elif effective_chl > 0.28:
+        activity = "Active Foraging"
+        density_label = "Moderate Foraging Shoals"
+        fish_count = min(200, int(round(90 + effective_chl * 150)))
+    else:
+        activity = "Calm"
+        density_label = "Oligotrophic Desert (Sparse Solitary Fish)"
+        fish_count = max(18, int(round(effective_chl * 75 + 12)))
+
+    if depth > 200:
+        fish_count = max(10, int(round(fish_count * 0.15)))
+    if is_land:
+        fish_count = 0
+
     return {
         "coordinate": {"latitude": round(lat, 5), "longitude": round(lon, 5)},
         "basin": basin,
@@ -275,6 +303,14 @@ def subgrid_telemetry(
         "chlorophyll_mg_m3": chlorophyll,
         "current_speed_m_s": current_speed,
         "current_vector": {"u": current_u, "v": current_v},
+        "marine_biomass": {
+            "chlorophyll_mg_m3": chlorophyll,
+            "primary_productivity_mg_c": primary_prod,
+            "fish_density_index": density_idx,
+            "fish_density_label": density_label,
+            "school_activity": activity,
+            "estimated_fish_count": fish_count,
+        },
         "depth_levels_m": DEPTH_LEVELS,
         "ctd_profile": {
             "temperatures": temp_profile,

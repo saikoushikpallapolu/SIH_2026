@@ -18,6 +18,7 @@ import {
   Radio,
   RotateCcw,
   SlidersHorizontal,
+  Sparkles,
   Thermometer,
   Waves,
   Wind,
@@ -25,7 +26,7 @@ import {
   Zap,
 } from 'lucide-react'
 import GlobeScene from './GlobeScene'
-import ImmersiveOcean from './ImmersiveOcean'
+import ImmersiveOcean, { type DiveTelemetry } from './ImmersiveOcean'
 import catalogData from '../data/processed/observations/instruments_catalog.json'
 import type { Instrument as CatalogInstrument } from './types'
 const instruments = catalogData as CatalogInstrument[]
@@ -35,9 +36,11 @@ import {
   getCompassHeading,
   getTsunamiScenarioById,
   isPointInIndianOcean,
+  OCEAN_HOTSPOTS,
   querySubgridTelemetry,
   SCIENTIFIC_PALETTES,
   TSUNAMI_SCENARIOS,
+  type OceanHotspot,
   type SubgridTelemetry,
 } from './oceanDataEngine'
 import type { CoastalStation, CurrentSystem, Instrument, OceanVariable, Selection, TsunamiScenario, ViewMode } from './types'
@@ -103,7 +106,39 @@ export default function App() {
   const [telemetry, setTelemetry] = useState<SubgridTelemetry | null>(null)
   const [profileOpen, setProfileOpen] = useState<boolean>(false)
   const [zenMode, setZenMode] = useState<boolean>(false)
-  const [diveTelemetry, setDiveTelemetry] = useState({ depth: 460, temperature: 26.1 })
+  const [diveTelemetry, setDiveTelemetry] = useState<DiveTelemetry | {
+    depth: number
+    temperature: number
+    salinity?: number
+    chlorophyll?: number
+    currentSpeed?: number
+    biomass?: {
+      primary_productivity_mg_c: number
+      fish_density_index: number
+      school_activity: 'Calm' | 'Active Foraging' | 'Swarming Baitball' | 'Feeding Frenzy'
+      estimated_fish_count: number
+    }
+  }>({
+    depth: 24,
+    temperature: 28.5,
+    salinity: 35.2,
+    chlorophyll: 1.85,
+    currentSpeed: 0.45,
+    biomass: {
+      primary_productivity_mg_c: 888.0,
+      fish_density_index: 85,
+      school_activity: 'Feeding Frenzy',
+      estimated_fish_count: 820,
+    }
+  })
+  const [hotspotsOpen, setHotspotsOpen] = useState<boolean>(false)
+  const [selectedHotspotCategory, setSelectedHotspotCategory] = useState<string>('all')
+
+  // Filtered hotspots list based on active category
+  const filteredHotspots = useMemo(() => {
+    if (selectedHotspotCategory === 'all') return OCEAN_HOTSPOTS
+    return OCEAN_HOTSPOTS.filter((h) => h.category === selectedHotspotCategory)
+  }, [selectedHotspotCategory])
 
   // Currents Mode State
   const [showStreamlines, setShowStreamlines] = useState<boolean>(true)
@@ -214,6 +249,13 @@ export default function App() {
     setTeleportNonce(Date.now())
   }
 
+  const handleHotspotSelect = (spot: OceanHotspot) => {
+    setSelection({ latitude: spot.latitude, longitude: spot.longitude })
+    setDepth(spot.defaultDepth)
+    setSelectedInstrument(null)
+    setTeleportNonce(Date.now())
+  }
+
   const handleTeleportCamera = () => {
     setTeleportNonce(Date.now())
   }
@@ -250,7 +292,6 @@ export default function App() {
             timeIndex={Math.floor(monthIndex / 50)}
             onTelemetry={(tel) => {
               setDiveTelemetry(tel)
-              setDepth(tel.depth)
             }}
           />
         ) : (
@@ -333,6 +374,13 @@ export default function App() {
             >
               <Compass size={14} /> Ocean Dive
             </button>
+            <button
+              className={hotspotsOpen ? 'active' : ''}
+              onClick={() => setHotspotsOpen((v) => !v)}
+              title="Browse 18 Curated Biological Upwellings, Deep Trenches & Coral Atolls"
+            >
+              <Sparkles size={14} color="#10b981" /> Hotspots
+            </button>
           </div>
 
           <div className="topbar-actions">
@@ -388,6 +436,12 @@ export default function App() {
             {telemetry.is_land && (
               <span className="land-badge">LANDMASS</span>
             )}
+            {telemetry.marine_biomass && !telemetry.is_land && telemetry.chlorophyll_mg_m3 > 0.4 && (
+              <span className="biomass-chip" title={telemetry.marine_biomass.fish_density_label}>
+                <span className="pulse green" style={{ width: 6, height: 6 }} />
+                {telemetry.marine_biomass.school_activity}
+              </span>
+            )}
           </div>
 
           <div className="subgrid-coords">
@@ -437,6 +491,15 @@ export default function App() {
                 <small>mg/m³</small>
               </strong>
             </div>
+            {telemetry.marine_biomass && !telemetry.is_land && (
+              <div className="metric-box biomass-box">
+                <span>PRIMARY PROD</span>
+                <strong>
+                  {telemetry.marine_biomass.primary_productivity_mg_c}
+                  <small>mg C/m²/d</small>
+                </strong>
+              </div>
+            )}
           </div>
 
           <div className="subgrid-actions">
@@ -469,6 +532,14 @@ export default function App() {
                 <Lock size={13} /> Dive Locked
               </button>
             )}
+
+            <button
+              className="teleport-btn"
+              onClick={() => setHotspotsOpen(true)}
+              title="Open Ocean Hotspots & Biomes Drawer"
+            >
+              <Sparkles size={13} color="#10b981" /> Hotspots
+            </button>
 
             {!isInsideIndianOcean && (
               <button
@@ -883,23 +954,52 @@ export default function App() {
         </footer>
       )}
 
-      {/* Dive HUD (Minimalist) */}
+      {/* Dive HUD (Enhanced with Marine Biomass, Chlorophyll & Plankton Productivity) */}
       {!zenMode && mode === 'dive' && (
         <>
           <section className="dive-hud-clean glass">
             <div className="dive-title">
               <Compass size={13} />
               <span>
-                {Math.abs(selection.latitude).toFixed(2)}°N · {Math.abs(selection.longitude).toFixed(2)}°E
+                {Math.abs(selection.latitude).toFixed(2)}°{selection.latitude >= 0 ? 'N' : 'S'} ·{' '}
+                {Math.abs(selection.longitude).toFixed(2)}°{selection.longitude >= 0 ? 'E' : 'W'}
               </span>
             </div>
             <div className="dive-depth-big">
               {diveTelemetry.depth}
               <small>m</small>
             </div>
-            <div style={{ fontSize: 12, color: '#8ec9db', fontFamily: 'DM Mono' }}>
-              Water: <b>{diveTelemetry.temperature.toFixed(1)}°C</b>
+            <div className="dive-hud-metrics-row">
+              <div className="dive-chip">
+                <span>TEMP</span>
+                <b>{diveTelemetry.temperature.toFixed(1)}°C</b>
+              </div>
+              {diveTelemetry.salinity !== undefined && (
+                <div className="dive-chip">
+                  <span>SALINITY</span>
+                  <b>{diveTelemetry.salinity.toFixed(1)} PSU</b>
+                </div>
+              )}
+              {diveTelemetry.chlorophyll !== undefined && (
+                <div className="dive-chip chl">
+                  <span>CHL-A</span>
+                  <b>{diveTelemetry.chlorophyll.toFixed(2)} mg/m³</b>
+                </div>
+              )}
             </div>
+
+            {diveTelemetry.biomass && (
+              <div className="dive-biomass-panel">
+                <div className="biomass-badge-row">
+                  <span className="pulse emerald" />
+                  <span className="biomass-state-text">{diveTelemetry.biomass.school_activity.toUpperCase()}</span>
+                  <span className="biomass-fish-count">· ~{diveTelemetry.biomass.estimated_fish_count} Fish</span>
+                </div>
+                <div className="biomass-subtext">
+                  Primary Prod: <b>{diveTelemetry.biomass.primary_productivity_mg_c} mg C/m²/d</b>
+                </div>
+              </div>
+            )}
           </section>
 
           <div className="dive-controls-hint glass">
@@ -1057,6 +1157,108 @@ export default function App() {
           <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#7faab8', fontFamily: 'DM Mono' }}>
             <span>Seabed: <b>{Math.round(telemetry.seabed_depth_m).toLocaleString()} m</b></span>
             <span>Source: <b>25-Yr 4D Binary Cube</b></span>
+          </div>
+        </aside>
+      )}
+
+      {/* Collapsible Ocean Hotspots & Biomes Drawer */}
+      {hotspotsOpen && (
+        <aside className="hotspots-drawer glass" aria-label="Ocean Hotspots & Biomes">
+          <div className="hotspots-header">
+            <div className="title-row">
+              <Sparkles size={16} color="#10b981" />
+              <div>
+                <h3>Ocean Hotspots & Biomes</h3>
+                <span>18 Curated Biological Upwellings, Deep Trenches & Coral Atolls</span>
+              </div>
+            </div>
+            <button className="icon-btn" onClick={() => setHotspotsOpen(false)} aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
+
+          {/* Filter category pills */}
+          <div className="hotspot-filter-pills">
+            {[
+              { id: 'all', label: 'All Hotspots (18)' },
+              { id: 'bloom_upwelling', label: 'Upwelling Blooms (8)' },
+              { id: 'trench_abyss', label: 'Deep Trenches (3)' },
+              { id: 'delta_estuary', label: 'River Plumes (3)' },
+              { id: 'coral_atoll', label: 'Coral Atolls (2)' },
+              { id: 'volcanic_ridge', label: 'Volcanic Ridges (2)' },
+            ].map((cat) => (
+              <button
+                key={cat.id}
+                className={`filter-pill ${selectedHotspotCategory === cat.id ? 'active' : ''}`}
+                onClick={() => setSelectedHotspotCategory(cat.id)}
+              >
+                {cat.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Scrollable list of hotspot cards */}
+          <div className="hotspots-scroll-list">
+            {filteredHotspots.map((spot) => (
+              <div
+                key={spot.id}
+                className={`hotspot-card glass ${Math.abs(selection.latitude - spot.latitude) < 0.2 && Math.abs(selection.longitude - spot.longitude) < 0.2 ? 'active' : ''}`}
+                onClick={() => handleHotspotSelect(spot)}
+              >
+                <div className="hotspot-card-top">
+                  <div className="hotspot-name-block">
+                    <h4>{spot.name}</h4>
+                    <p>{spot.subtitle}</p>
+                  </div>
+                  <span
+                    className="hotspot-category-badge"
+                    style={{
+                      borderColor: spot.badgeColor,
+                      color: spot.badgeColor,
+                      background: `${spot.badgeColor}18`,
+                    }}
+                  >
+                    {spot.categoryLabel}
+                  </span>
+                </div>
+
+                <p className="hotspot-description">{spot.description}</p>
+
+                <div className="hotspot-card-footer">
+                  <div className="hotspot-geo-tag">
+                    <MapPin size={11} />
+                    <span>
+                      {Math.abs(spot.latitude).toFixed(1)}°{spot.latitude >= 0 ? 'N' : 'S'},{' '}
+                      {Math.abs(spot.longitude).toFixed(1)}°{spot.longitude >= 0 ? 'E' : 'W'} · Depth: {spot.defaultDepth}m
+                    </span>
+                  </div>
+                  <div className="hotspot-actions">
+                    <button
+                      className="hotspot-fly-btn"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleHotspotSelect(spot)
+                      }}
+                    >
+                      <Crosshair size={11} /> Swoop
+                    </button>
+                    {isPointInIndianOcean(spot.latitude, spot.longitude) && (
+                      <button
+                        className="hotspot-dive-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleHotspotSelect(spot)
+                          setMode('dive')
+                          setHotspotsOpen(false)
+                        }}
+                      >
+                        <Navigation size={11} /> Dive In
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </aside>
       )}
