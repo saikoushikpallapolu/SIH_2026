@@ -408,6 +408,7 @@ export default function App() {
             anchorCorner={anchorCorner}
             hoverCorner={hoverCorner}
             onInstrument={handleInstrumentSelect}
+            onSelectPoint={handlePointSelect}
             onSelectStation={handleStationSelect}
             onSelectCurrentSystem={handleCurrentSystemSelect}
             onAreaCornerSelect={handleAreaCornerSelect}

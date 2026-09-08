@@ -421,6 +421,15 @@ def get_slice(
         if chl_mem is None:
             raise HTTPException(status_code=503, detail="Chlorophyll cube not loaded")
         slice_data = np.array(chl_mem[month], dtype=np.float32)
+        if depth > 0:
+            # Photic euphotic zone attenuation with DCM peak at ~45m
+            if depth <= 45.0:
+                depth_factor = 1.0 + (depth / 45.0) * 0.25
+            elif depth <= 120.0:
+                depth_factor = 1.25 * (1.0 - (depth - 45.0) / 75.0) * 0.9 + 0.1
+            else:
+                depth_factor = max(0.005, 0.1 * float(np.exp(-(depth - 120.0) / 50.0)))
+            slice_data = slice_data * depth_factor
 
     elif variable == "currents":
         u_mem = get_u_memmap()

@@ -532,19 +532,19 @@ function OceanShader({
 
           // 3. Chlorophyll: NASA MODIS Ocean Color / cmocean alga (Ultra-Vivid Global Color Grading)
           vec3 paletteAlga(float t) {
-            vec3 c0 = vec3(0.015, 0.08, 0.22); // Oligotrophic gyres (rich deep sapphire blue)
-            vec3 c1 = vec3(0.02, 0.24, 0.36);  // Low-moderate productivity cyan-teal (0.2 mg/m3)
-            vec3 c2 = vec3(0.06, 0.52, 0.34);  // Marine emerald green (0.5 mg/m3)
-            vec3 c3 = vec3(0.18, 0.78, 0.35);  // Rich vibrant phytoplankton green (0.9 mg/m3)
-            vec3 c4 = vec3(0.58, 0.94, 0.26);  // Luminous chartreuse bloom (1.5 mg/m3)
-            vec3 c5 = vec3(0.96, 0.96, 0.22);  // Radiant golden biological peak (2.2 mg/m3)
-            vec3 c6 = vec3(1.0, 0.62, 0.12);   // Hyper-productive upwelling core (> 3.0 mg/m3)
+            vec3 c0 = vec3(0.018, 0.10, 0.28); // Oligotrophic tropical gyres (deep sapphire blue)
+            vec3 c1 = vec3(0.02, 0.32, 0.42);  // Low-moderate productivity cyan-teal (0.05 - 0.1 mg/m3)
+            vec3 c2 = vec3(0.05, 0.58, 0.36);  // Marine emerald shelf (0.15 mg/m3)
+            vec3 c3 = vec3(0.18, 0.82, 0.32);  // Rich vibrant phytoplankton green (0.35 mg/m3)
+            vec3 c4 = vec3(0.62, 0.94, 0.20);  // Luminous chartreuse bloom (0.75 mg/m3)
+            vec3 c5 = vec3(0.98, 0.94, 0.16);  // Radiant golden biological peak (1.5 mg/m3)
+            vec3 c6 = vec3(1.0, 0.58, 0.10);   // Hyper-productive upwelling core (> 2.5 mg/m3)
             if (t < 0.15) return mix(c0, c1, t / 0.15);
-            if (t < 0.30) return mix(c1, c2, (t - 0.15) / 0.15);
-            if (t < 0.48) return mix(c2, c3, (t - 0.30) / 0.18);
-            if (t < 0.66) return mix(c3, c4, (t - 0.48) / 0.18);
-            if (t < 0.82) return mix(c4, c5, (t - 0.66) / 0.16);
-            return mix(c5, c6, (t - 0.82) / 0.18);
+            if (t < 0.32) return mix(c1, c2, (t - 0.15) / 0.17);
+            if (t < 0.50) return mix(c2, c3, (t - 0.32) / 0.18);
+            if (t < 0.70) return mix(c3, c4, (t - 0.50) / 0.20);
+            if (t < 0.86) return mix(c4, c5, (t - 0.70) / 0.16);
+            return mix(c5, c6, (t - 0.86) / 0.14);
           }
 
           // 4. Currents: cmocean speed
@@ -731,12 +731,12 @@ function OceanShader({
               // Dynamic undulating biological filaments
               float eddyFilament = sin(vPosition.x * 22.0 + sin(vPosition.y * 16.0 + uTime * 0.4) * 3.2) * 0.5 + 0.5;
 
-              // Continuous baseline everywhere across globe
+              // Continuous baseline everywhere across globe (0.14 baseline ensures visible marine cyan/teal, blooming into rich emeralds & golds)
               float chlVal = clamp(
-                0.08 + coastProx * 0.42 +
+                0.14 + coastProx * 0.46 +
                 somali + malabar + ganges + agulhas +
                 humboldt + benguela + california + canary + amazon + mississippi + eqPacific + subantarctic + northSubpolar +
-                eddyFilament * 0.12 - thermocline * 0.22,
+                eddyFilament * 0.08 - thermocline * 0.35,
                 0.0,
                 1.0
               );
@@ -754,22 +754,39 @@ function OceanShader({
               float sv = (lat - (-44.875)) / (32.0 - (-44.875));
               float val = texture2D(uOceanDataSlice, vec2(su, sv)).r;
               if (val > -990.0) {
+                vec3 sliceColor = globalBaseColor;
                 if (uVariable < 0.5) {
                   float normT = clamp((val - 2.0) / 30.0, 0.0, 1.0);
-                  globalBaseColor = paletteThermal(normT);
+                  sliceColor = paletteThermal(normT);
                 } else if (uVariable < 1.5) {
                   float normS = clamp((val - 31.0) / 6.0, 0.0, 1.0);
-                  globalBaseColor = paletteHaline(normS);
+                  sliceColor = paletteHaline(normS);
                 } else if (uVariable < 2.5) {
-                  float normC = clamp(val / 3.2, 0.0, 1.0);
-                  globalBaseColor = paletteAlga(normC);
+                  // NASA MODIS Ocean Color Logarithmic Transfer Function (0.025 to 2.5 mg/m3)
+                  if (val > 0.01) {
+                    float normC = clamp((log(max(val, 0.025)) - (-3.68888)) / 4.60517, 0.0, 1.0);
+                    sliceColor = paletteAlga(normC);
+                  }
                 }
+                // Seamless hermite feathering at Indian Ocean data boundaries
+                float edgeFade = smoothstep(20.125, 23.5, lon) *
+                                 (1.0 - smoothstep(121.5, 124.875, lon)) *
+                                 smoothstep(-44.875, -41.5, lat) *
+                                 (1.0 - smoothstep(28.5, 32.0, lat));
+                globalBaseColor = mix(globalBaseColor, sliceColor, edgeFade);
               }
             }
 
             // Lighting and seamless ocean surface synthesis
             float light = max(dot(vNormal, normalize(vec3(0.8, 0.9, 1.0))), 0.0);
-            vec3 litOcean = mix(earth, globalBaseColor * (0.65 + light * 0.60), uOverlayStrength);
+            vec3 dataColor;
+            if (uVariable > 1.5 && uVariable < 2.5) {
+              // Chlorophyll NASA Ocean Color: vibrant bio-pigment contrast
+              dataColor = globalBaseColor * (0.88 + light * 0.30);
+            } else {
+              dataColor = globalBaseColor * (0.65 + light * 0.60);
+            }
+            vec3 litOcean = mix(earth, dataColor, uOverlayStrength);
 
             // Clean land masking with zero color bleed
             gl_FragColor = vec4(mix(earth * (0.50 + light * 0.50), litOcean, water), 1.0);
@@ -782,7 +799,7 @@ function OceanShader({
   // Fetch real high-resolution 0.25-deg ocean data slice from binary cubes engine
   useEffect(() => {
     let active = true
-    const month = Math.floor(timeIndex / 50)
+    const month = Math.max(0, Math.min(299, Math.round(timeIndex)))
     fetchOceanDataSlice(variable, month, depth)
       .then((data) => {
         if (!active || !data) return
@@ -1205,7 +1222,10 @@ function GlobeHotspotMarker({
           e.stopPropagation()
           setHovered(true)
         }}
-        onPointerOut={() => setHovered(false)}
+        onPointerOut={(e) => {
+          e.stopPropagation()
+          setHovered(false)
+        }}
         position={[0, 0, 0.04]}
       >
         <cylinderGeometry args={[0.025, 0.025, 0.08, 12]} />
@@ -1237,30 +1257,37 @@ function GlobeHotspotMarker({
 
       {/* Hover or Selected floating HTML HUD badge */}
       {(hovered || isSelected) && (
-        <Html position={[0, 0, 0.11]} center distanceFactor={8} zIndexRange={[100, 0]}>
+        <Html
+          position={[0, 0, 0.11]}
+          center
+          pointerEvents="none"
+          zIndexRange={[100, 0]}
+        >
           <div
             style={{
               background: 'rgba(5, 23, 38, 0.92)',
               border: `1px solid ${color}`,
-              boxShadow: `0 4px 20px ${color}44`,
+              boxShadow: `0 4px 16px ${color}33`,
               color: '#ffffff',
-              padding: '5px 9px',
+              padding: '6px 10px',
               borderRadius: '6px',
               fontSize: '11px',
               fontWeight: 600,
               whiteSpace: 'nowrap',
               pointerEvents: 'none',
-              transform: 'translateY(-10px)',
+              userSelect: 'none',
+              transform: 'translateY(-12px)',
               backdropFilter: 'blur(8px)',
               fontFamily: 'Inter, system-ui, sans-serif',
               display: 'flex',
               flexDirection: 'column',
               gap: '2px',
+              maxWidth: '240px',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: color }} />
-              <span style={{ color: '#fff' }}>{spot.name}</span>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: color, flexShrink: 0 }} />
+              <span style={{ color: '#fff', fontSize: '11px', fontWeight: 600 }}>{spot.name}</span>
             </div>
             <span style={{ color: color, fontSize: '9px', fontWeight: 500 }}>
               {spot.categoryLabel} · {spot.defaultDepth}m

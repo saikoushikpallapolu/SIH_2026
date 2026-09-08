@@ -124,21 +124,22 @@ def build_chlorophyll_4d_cube():
         month = (month_idx % 12) + 1
         monsoon_phase = 2.0 * np.pi * ((month - 1) / 12.0)
 
-        # Baseline oligotrophic tropical background (0.08 - 0.16 mg/m3)
-        base_chl = 0.11 + 0.05 * np.cos(np.deg2rad(lat_2d * 1.8))
+        # Baseline oligotrophic tropical background (0.04 - 0.12 mg/m3)
+        base_chl = 0.055 + 0.035 * np.cos(np.deg2rad(lat_2d * 1.5))
         
         # Southwest Summer Monsoon (June-Sept): Massive seasonal upwelling peak
-        sw_monsoon_intensity = np.maximum(0.0, np.sin(monsoon_phase - 2.6))
-        # Northeast Winter Monsoon (Dec-Feb): Secondary Arabian Sea winter cooling bloom
-        ne_monsoon_intensity = np.maximum(0.0, np.sin(monsoon_phase - 5.8)) * (lat_2d > 12.0) * (lon_2d < 74.0)
+        sw_monsoon_intensity = np.maximum(0.0, np.sin(monsoon_phase - 2.5))
+        # Northeast Winter Monsoon (Dec-Feb): Arabian Sea convective winter cooling bloom
+        arabian_winter_bloom_mask = np.exp(-((lat_2d - 19.5)**2 / (2 * 4.5**2) + (lon_2d - 64.5)**2 / (2 * 6.5**2)))
+        ne_monsoon_intensity = np.maximum(0.0, np.sin(monsoon_phase - 5.8)) * arabian_winter_bloom_mask
 
-        somali_val = somali_mask * (1.6 + sw_monsoon_intensity * 1.85)
-        malabar_val = malabar_mask * (1.2 + sw_monsoon_intensity * 1.45)
-        ganges_val = ganges_mask * (1.4 + np.sin(monsoon_phase - 3.2) * 0.95)
-        srilanka_val = srilanka_mask * (1.1 + sw_monsoon_intensity * 0.85)
-        agulhas_val = agulhas_mask * (1.2 + np.cos(monsoon_phase) * 0.65)
-        southern_val = southern_belt * (0.85 + np.cos(monsoon_phase) * 0.45)
-        winter_arabian_val = ne_monsoon_intensity * 0.85
+        somali_val = somali_mask * (0.15 + sw_monsoon_intensity * 2.85)
+        malabar_val = malabar_mask * (0.22 + sw_monsoon_intensity * 1.75)
+        ganges_val = ganges_mask * (0.65 + np.sin(monsoon_phase - 3.2) * 0.95)
+        srilanka_val = srilanka_mask * (0.35 + sw_monsoon_intensity * 1.25)
+        agulhas_val = agulhas_mask * (0.45 + np.cos(monsoon_phase) * 0.65)
+        southern_val = southern_belt * (0.45 + np.cos(monsoon_phase) * 0.45)
+        winter_arabian_val = ne_monsoon_intensity * 0.95
 
         total_chl = (
             base_chl +
@@ -151,9 +152,9 @@ def build_chlorophyll_4d_cube():
             winter_arabian_val
         )
 
-        # Micro-scale realistic filament turbulence
-        noise = np.sin(lat_2d * 4.2 + lon_2d * 3.8 + month_idx * 0.12) * 0.04
-        total_chl = np.clip(total_chl + noise, 0.02, 3.5) * is_ocean
+        # Micro-scale realistic filament turbulence (isotropic natural 2D eddies)
+        noise = (np.sin(lat_2d * 1.4 + np.sin(lon_2d * 1.8)) * np.cos(lon_2d * 1.4 + np.cos(lat_2d * 1.8))) * 0.018
+        total_chl = np.clip(total_chl + noise, 0.02, 3.5)
 
         chl_cube[month_idx] = total_chl.astype(np.float16)
 
