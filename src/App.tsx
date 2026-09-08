@@ -19,6 +19,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Thermometer,
   Waves,
   Wind,
@@ -26,15 +27,19 @@ import {
   Zap,
 } from 'lucide-react'
 import GlobeScene from './GlobeScene'
-import ImmersiveOcean, { type DiveTelemetry } from './ImmersiveOcean'
+import DeepDiveBlock from './DeepDiveBlock'
+import type { DiveTelemetry } from './ImmersiveOcean'
 import catalogData from '../data/processed/observations/instruments_catalog.json'
 import type { Instrument as CatalogInstrument } from './types'
 const instruments = catalogData as CatalogInstrument[]
 import {
+  BENCHMARK_REGIONS,
   CURRENT_SYSTEMS,
   DEPTH_STOPS,
+  computeSpatialBoundary,
   getCompassHeading,
   getTsunamiScenarioById,
+  isDryLand,
   isPointInIndianOcean,
   OCEAN_HOTSPOTS,
   querySubgridTelemetry,
@@ -43,7 +48,22 @@ import {
   type OceanHotspot,
   type SubgridTelemetry,
 } from './oceanDataEngine'
-import type { CoastalStation, CurrentSystem, Instrument, OceanVariable, Selection, TsunamiScenario, ViewMode } from './types'
+import type { CoastalStation, CurrentSystem, Instrument, OceanVariable, Selection, SpatialBoundary, TsunamiScenario, ViewMode } from './types'
+
+// Checks whether an arbitrary geographic boundary encloses any ocean / marine cells
+function boundaryContainsMarine(boundary: SpatialBoundary): boolean {
+  const [minLat, maxLat, minLon, maxLon] = boundary.bbox
+  for (let r = 0; r <= 4; r++) {
+    const lat = minLat + (r / 4) * (maxLat - minLat)
+    for (let c = 0; c <= 4; c++) {
+      const lon = minLon + (c / 4) * (maxLon - minLon)
+      if (!isDryLand(lat, lon)) {
+        return true
+      }
+    }
+  }
+  return false
+}
 
 // Converts month index 0..299 into readable year/month
 function formatEpoch(monthIndex: number): string {
@@ -170,6 +190,57 @@ export default function App() {
   const [showIsochrones, setShowIsochrones] = useState<boolean>(true)
   const [selectedStation, setSelectedStation] = useState<CoastalStation | null>(null)
 
+  // Regional Deep Dive & Interactive Bounding Box Selection State (100% Area Selection)
+  const [activeBoundary, setActiveBoundary] = useState<SpatialBoundary | null>(null)
+  const [anchorCorner, setAnchorCorner] = useState<{ latitude: number; longitude: number } | null>(null)
+  const [hoverCorner, setHoverCorner] = useState<{ latitude: number; longitude: number } | null>(null)
+
+  const handleAreaCornerSelect = (coord: { latitude: number; longitude: number }) => {
+    if (!anchorCorner) {
+      // First click: drop Corner A and reset any previous boundary
+      setAnchorCorner(coord)
+      setHoverCorner(coord)
+      setActiveBoundary(null)
+    } else {
+      // Second click: lock bounding box
+      const minLat = Math.min(anchorCorner.latitude, coord.latitude)
+      const maxLat = Math.max(anchorCorner.latitude, coord.latitude)
+      const minLon = Math.min(anchorCorner.longitude, coord.longitude)
+      const maxLon = Math.max(anchorCorner.longitude, coord.longitude)
+
+      // Guard against accidental double click at exact same spot
+      if (Math.abs(maxLat - minLat) < 0.2 && Math.abs(maxLon - minLon) < 0.2) {
+        setAnchorCorner(coord)
+        setHoverCorner(coord)
+        return
+      }
+
+      const newBoundary = computeSpatialBoundary(
+        { latitude: minLat, longitude: minLon },
+        { latitude: maxLat, longitude: maxLon },
+        `Selected Region (${minLat.toFixed(1)}°–${maxLat.toFixed(1)}°N, ${minLon.toFixed(1)}°–${maxLon.toFixed(1)}°E)`
+      )
+      setActiveBoundary(newBoundary)
+      setAnchorCorner(null)
+      setHoverCorner(null)
+      setSelection({ latitude: newBoundary.center[0], longitude: newBoundary.center[1] })
+    }
+  }
+
+  const handleAreaHover = (coord: { latitude: number; longitude: number }) => {
+    if (anchorCorner) {
+      setHoverCorner(coord)
+    }
+  }
+
+  const handleBenchmarkSelect = (regionBoundary: SpatialBoundary) => {
+    setActiveBoundary(regionBoundary)
+    setAnchorCorner(null)
+    setHoverCorner(null)
+    setSelection({ latitude: regionBoundary.center[0], longitude: regionBoundary.center[1] })
+    setTeleportNonce(Date.now())
+  }
+
   // Query live subgrid telemetry on selection, depth, or time change
   useEffect(() => {
     let active = true
@@ -281,18 +352,33 @@ export default function App() {
     return activeScenario.coastal_stations.filter((st) => tsunamiHour >= st.arrival_hours)
   }, [activeScenario, tsunamiHour])
 
+  // Stable deep dive boundary
+  const diveBoundary = useMemo(() => {
+    if (activeBoundary) return activeBoundary
+    const lat = selection.latitude
+    const lon = selection.longitude
+    return computeSpatialBoundary(
+      {
+        latitude: Math.max(-44, lat - 2.5),
+        longitude: Math.max(21, lon - 2.5),
+      },
+      {
+        latitude: Math.min(31, lat + 2.5),
+        longitude: Math.min(124, lon + 2.5),
+      },
+      `Region (${lat.toFixed(1)}°N, ${lon.toFixed(1)}°E)`
+    )
+  }, [activeBoundary, selection.latitude, selection.longitude])
+
   return (
     <main className="app-shell">
       {/* 3D Visual Canvas */}
       <div className="globe-wrap">
         {mode === 'dive' ? (
-          <ImmersiveOcean
-            variable={variable}
-            selection={isInsideIndianOcean ? selection : { latitude: 12.5, longitude: 68.3 }}
-            timeIndex={Math.floor(monthIndex / 50)}
-            onTelemetry={(tel) => {
-              setDiveTelemetry(tel)
-            }}
+          <DeepDiveBlock
+            boundary={diveBoundary}
+            monthIndex={monthIndex}
+            onExit={() => setMode('explore')}
           />
         ) : (
           <GlobeScene
@@ -314,10 +400,14 @@ export default function App() {
             tsunamiHour={tsunamiHour}
             tsunamiScenario={activeScenario}
             selectedStation={selectedStation}
+            activeBoundary={activeBoundary}
+            anchorCorner={anchorCorner}
+            hoverCorner={hoverCorner}
             onInstrument={handleInstrumentSelect}
-            onSelectPoint={handlePointSelect}
             onSelectStation={handleStationSelect}
             onSelectCurrentSystem={handleCurrentSystemSelect}
+            onAreaCornerSelect={handleAreaCornerSelect}
+            onAreaHover={handleAreaHover}
           />
         )}
       </div>
@@ -360,19 +450,12 @@ export default function App() {
             <button
               className={mode === 'dive' ? 'active' : ''}
               onClick={() => {
-                if (!canDive) {
-                  handleJumpToIndianOcean()
-                }
                 setMode('dive')
                 setIsTsunamiPlaying(false)
               }}
-              title={
-                canDive
-                  ? 'Ocean Dive simulation'
-                  : 'Reposition to Indian Ocean 4D Twin Sector (Arabian Sea) and Dive'
-              }
+              title="Regional 3D Deep Dive (ETOPO Bathymetry, Coastline & CTD Telemetry)"
             >
-              <Compass size={14} /> Ocean Dive
+              <Compass size={14} /> 3D Deep Dive
             </button>
             <button
               className={hotspotsOpen ? 'active' : ''}
@@ -393,6 +476,11 @@ export default function App() {
               <div className="status-badge currents">
                 <span className="pulse cyan" />
                 <span>GEOSTROPHIC & JET CURRENTS</span>
+              </div>
+            ) : mode === 'dive' ? (
+              <div className="status-badge currents">
+                <span className="pulse cyan" />
+                <span>3D DIGITAL TWIN · ETOPO 2022</span>
               </div>
             ) : (
               <div className="status-badge">
@@ -424,115 +512,107 @@ export default function App() {
         </button>
       )}
 
-      {/* 1. GENERAL EXPLORE MODE: Sub-Grid Telemetry Card */}
-      {!zenMode && mode === 'explore' && telemetry && (
-        <section className="subgrid-card glass">
-          <div className="basin-badge">
-            <MapPin size={13} />
-            <span>{telemetry.basin}</span>
-            {!isInsideIndianOcean && (
-              <span className="global-badge">GLOBAL SCAN</span>
-            )}
-            {telemetry.is_land && (
-              <span className="land-badge">LANDMASS</span>
-            )}
-            {telemetry.marine_biomass && !telemetry.is_land && telemetry.chlorophyll_mg_m3 > 0.4 && (
-              <span className="biomass-chip" title={telemetry.marine_biomass.fish_density_label}>
-                <span className="pulse green" style={{ width: 6, height: 6 }} />
-                {telemetry.marine_biomass.school_activity}
-              </span>
-            )}
-          </div>
-
-          <div className="subgrid-coords">
-            <span>
-              {Math.abs(telemetry.coordinate.latitude).toFixed(4)}°
-              {telemetry.coordinate.latitude >= 0 ? 'N' : 'S'}
-            </span>
-            <span>
-              {Math.abs(telemetry.coordinate.longitude).toFixed(4)}°
-              {telemetry.coordinate.longitude >= 0 ? 'E' : 'W'}
+      {/* 100% Area Selection Guidance & Benchmark Presets */}
+      {!zenMode && (mode === 'explore' || mode === 'currents') && (
+        <aside className="area-selector-toolbar glass">
+          <div className="area-guide-tag">
+            <Square size={13} color="#00f2fe" />
+            <span className="draw-instructions">
+              {anchorCorner
+                ? `✦ Corner A: (${anchorCorner.latitude.toFixed(1)}°, ${anchorCorner.longitude.toFixed(1)}°) — Click opposite corner to complete area`
+                : activeBoundary
+                ? `✦ Region Selected (${activeBoundary.width_km} × ${activeBoundary.height_km} km) — Click globe anytime to select another area`
+                : '✦ Click two points on the globe to select any marine or coastal area'}
             </span>
           </div>
 
-          <div className="subgrid-metrics">
-            <div className="metric-box">
-              <span>WATER TEMP</span>
-              <strong>
-                {telemetry.temperature_c.toFixed(1)}
-                <small>°C</small>
-              </strong>
-            </div>
-            <div className="metric-box">
-              <span>SALINITY</span>
-              <strong>
-                {telemetry.salinity_psu.toFixed(1)}
-                <small>PSU</small>
-              </strong>
-            </div>
-            <div className="metric-box">
-              <span>SEABED DEPTH</span>
-              <strong>
-                {Math.round(telemetry.seabed_depth_m).toLocaleString()}
-                <small>m</small>
-              </strong>
-            </div>
-            <div className="metric-box">
-              <span>CURRENT SPEED</span>
-              <strong>
-                {telemetry.current_speed_m_s.toFixed(2)}
-                <small>m/s</small>
-              </strong>
-            </div>
-            <div className="metric-box">
-              <span>CHLOROPHYLL</span>
-              <strong>
-                {telemetry.chlorophyll_mg_m3.toFixed(2)}
-                <small>mg/m³</small>
-              </strong>
-            </div>
-            {telemetry.marine_biomass && !telemetry.is_land && (
-              <div className="metric-box biomass-box">
-                <span>PRIMARY PROD</span>
-                <strong>
-                  {telemetry.marine_biomass.primary_productivity_mg_c}
-                  <small>mg C/m²/d</small>
-                </strong>
-              </div>
-            )}
-          </div>
-
-          <div className="subgrid-actions">
+          {(activeBoundary || anchorCorner) && (
             <button
-              className="teleport-btn"
-              onClick={handleTeleportCamera}
-              title="Smoothly swoop camera to this coordinate"
+              className="benchmark-chip"
+              onClick={() => {
+                setActiveBoundary(null)
+                setAnchorCorner(null)
+                setHoverCorner(null)
+              }}
+              title="Clear current area selection"
             >
-              <Crosshair size={13} /> Teleport
+              <X size={11} /> Clear
             </button>
+          )}
 
-            {canDive ? (
+          <div className="benchmark-chips-row">
+            {BENCHMARK_REGIONS.map((reg) => (
               <button
-                className="dive-action-btn"
-                onClick={() => setMode('dive')}
-                title="Dive underwater at this exact coordinate"
+                key={reg.id}
+                className={`benchmark-chip ${activeBoundary?.label === reg.name ? 'active' : ''}`}
+                onClick={() => handleBenchmarkSelect(reg.boundary)}
+                title={reg.subtitle}
               >
-                <Navigation size={13} /> Dive In
+                {reg.name.split('&')[0].trim()}
+              </button>
+            ))}
+          </div>
+        </aside>
+      )}
+
+      {/* Floating Selected Region Action Card on Globe */}
+      {!zenMode && (mode === 'explore' || mode === 'currents') && activeBoundary && !anchorCorner && (
+        <aside className="selected-region-card glass">
+          <div className="selected-region-header">
+            <span className="selected-region-title">
+              {activeBoundary.label || 'Selected Marine Region'}
+            </span>
+            <button
+              className="icon-btn"
+              onClick={() => setActiveBoundary(null)}
+              title="Clear selection"
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          <div className="selected-region-stats">
+            <div className="region-stat-item">
+              <label>Span</label>
+              <strong>{activeBoundary.width_km} × {activeBoundary.height_km} km</strong>
+            </div>
+            <div className="region-stat-item">
+              <label>Surface Area</label>
+              <strong>{activeBoundary.area_km2.toLocaleString()} km²</strong>
+            </div>
+            <div className="region-stat-item">
+              <label>Lat Bounds</label>
+              <strong>{activeBoundary.bbox[0].toFixed(1)}° to {activeBoundary.bbox[1].toFixed(1)}°N</strong>
+            </div>
+            <div className="region-stat-item">
+              <label>Lon Bounds</label>
+              <strong>{activeBoundary.bbox[2].toFixed(1)}° to {activeBoundary.bbox[3].toFixed(1)}°E</strong>
+            </div>
+          </div>
+
+          <div className="selected-region-actions">
+            {boundaryContainsMarine(activeBoundary) ? (
+              <button
+                className="dive-now-btn"
+                onClick={() => {
+                  setMode('dive')
+                  setIsTsunamiPlaying(false)
+                }}
+                title="Enter 3D Digital Twin Block with true ETOPO bathymetry, coastline, and CTD telemetry"
+              >
+                <Navigation size={13} />
+                <span>3D Deep Dive</span>
               </button>
             ) : (
               <button
-                className="dive-action-btn disabled"
+                className="dive-now-btn disabled"
                 disabled
-                title={
-                  telemetry.is_land
-                    ? 'Cannot dive: Selected location is on continental landmass'
-                    : 'Ocean Dive simulation is exclusively calibrated for the Indian Ocean 4D Twin sector (20°E–125°E, 45°S–32°N)'
-                }
+                title="3D Deep Dive is calibrated for marine and coastal regions. Please select an area that includes ocean waters."
               >
-                <Lock size={13} /> Dive Locked
+                <Lock size={13} />
+                <span>Ocean Waters Required</span>
               </button>
             )}
-
             <button
               className="teleport-btn"
               onClick={() => setHotspotsOpen(true)}
@@ -540,26 +620,19 @@ export default function App() {
             >
               <Sparkles size={13} color="#10b981" /> Hotspots
             </button>
-
-            {!isInsideIndianOcean && (
-              <button
-                className="teleport-btn sector-jump-btn"
-                onClick={handleJumpToIndianOcean}
-                title="Return beacon to the Indian Ocean 4D Digital Twin sector"
-              >
-                <RotateCcw size={13} /> Return to Sector
-              </button>
-            )}
-
             <button
-              className="dive-action-btn"
-              onClick={() => setProfileOpen(true)}
-              title="View full CTD depth profile"
+              className="clear-region-btn"
+              onClick={() => {
+                setActiveBoundary(null)
+                setAnchorCorner(null)
+                setHoverCorner(null)
+              }}
+              title="Clear selection to draw again"
             >
-              <Activity size={13} /> Profile
+              Clear
             </button>
           </div>
-        </section>
+        </aside>
       )}
 
       {/* 2. CURRENTS MODE: Floating Direction & Velocity Compass Probe HUD */}
@@ -954,62 +1027,7 @@ export default function App() {
         </footer>
       )}
 
-      {/* Dive HUD (Enhanced with Marine Biomass, Chlorophyll & Plankton Productivity) */}
-      {!zenMode && mode === 'dive' && (
-        <>
-          <section className="dive-hud-clean glass">
-            <div className="dive-title">
-              <Compass size={13} />
-              <span>
-                {Math.abs(selection.latitude).toFixed(2)}°{selection.latitude >= 0 ? 'N' : 'S'} ·{' '}
-                {Math.abs(selection.longitude).toFixed(2)}°{selection.longitude >= 0 ? 'E' : 'W'}
-              </span>
-            </div>
-            <div className="dive-depth-big">
-              {diveTelemetry.depth}
-              <small>m</small>
-            </div>
-            <div className="dive-hud-metrics-row">
-              <div className="dive-chip">
-                <span>TEMP</span>
-                <b>{diveTelemetry.temperature.toFixed(1)}°C</b>
-              </div>
-              {diveTelemetry.salinity !== undefined && (
-                <div className="dive-chip">
-                  <span>SALINITY</span>
-                  <b>{diveTelemetry.salinity.toFixed(1)} PSU</b>
-                </div>
-              )}
-              {diveTelemetry.chlorophyll !== undefined && (
-                <div className="dive-chip chl">
-                  <span>CHL-A</span>
-                  <b>{diveTelemetry.chlorophyll.toFixed(2)} mg/m³</b>
-                </div>
-              )}
-            </div>
 
-            {diveTelemetry.biomass && (
-              <div className="dive-biomass-panel">
-                <div className="biomass-badge-row">
-                  <span className="pulse emerald" />
-                  <span className="biomass-state-text">{diveTelemetry.biomass.school_activity.toUpperCase()}</span>
-                  <span className="biomass-fish-count">· ~{diveTelemetry.biomass.estimated_fish_count} Fish</span>
-                </div>
-                <div className="biomass-subtext">
-                  Primary Prod: <b>{diveTelemetry.biomass.primary_productivity_mg_c} mg C/m²/d</b>
-                </div>
-              </div>
-            )}
-          </section>
-
-          <div className="dive-controls-hint glass">
-            <Compass size={13} />
-            <span>
-              Use <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to swim · <kbd>↑</kbd> <kbd>↓</kbd> for depth · Click & drag water to look
-            </span>
-          </div>
-        </>
-      )}
 
       {/* Standard Floating Bottom Dock for Explore & Currents Mode */}
       {!zenMode && mode !== 'tsunami' && mode !== 'dive' && (

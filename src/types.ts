@@ -91,3 +91,70 @@ export interface VectorSample {
   knots: number
   heading: number
 }
+
+export type SpatialBoundaryType = 'bbox' | 'polygon'
+
+export interface SpatialBoundary {
+  type: SpatialBoundaryType
+  bbox: [number, number, number, number] // [minLat, maxLat, minLon, maxLon]
+  vertices: [number, number][]          // Geodesic boundary coordinates [[lat, lon], ...]
+  center: [number, number]              // [centerLat, centerLon]
+  width_km: number
+  height_km: number
+  area_km2: number
+  label?: string
+}
+
+export interface TerrainSliceData {
+  dataset: string
+  native_resolution_deg: number
+  grid_res: number
+  bounds: {
+    min_lat: number
+    max_lat: number
+    min_lon: number
+    max_lon: number
+  }
+  min_elevation_m: number
+  max_elevation_m: number
+  land_fraction: number
+  ocean_fraction: number
+  elevation_grid: Float32Array
+  coastline_segments?: [number, number][][]
+  shelf_break_segments?: [number, number][][]
+}
+
+export interface CTDLevel {
+  depth_m: number
+  in_water_column: boolean
+  temperature_c: number | null
+  salinity_psu: number | null
+  bedrock_cutoff: boolean
+}
+
+export interface OceanPointProfile {
+  is_land: boolean
+  coordinate: { lat: number; lon: number }
+  seabed_depth_m?: number
+  elevation_m?: number
+  status?: string
+  message?: string
+  levels?: CTDLevel[]
+  thermocline?: {
+    detected: boolean
+    classification: 'Thermocline' | 'Temperature Profile'
+    max_gradient_c_per_m?: number
+    depth_range_m?: [number, number]
+  }
+  halocline?: {
+    detected: boolean
+    classification: 'Halocline' | 'Salinity Profile'
+    max_gradient_psu_per_m?: number
+    depth_range_m?: [number, number]
+  }
+  provenance: {
+    source: string
+    bathymetry_source: string
+  }
+}
+

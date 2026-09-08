@@ -20,3 +20,5 @@ data/processed/*.db
 !data/processed/observations/*.json
 !data/processed/extreme_events/*.json
 !data/processed/cubes/*.json
+
+.DS_Store
