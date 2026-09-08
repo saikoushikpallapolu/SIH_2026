@@ -1610,7 +1610,7 @@ button {
 .dive-hud-clean {
   position: absolute;
   top: 80px;
-  left: 24px;
+  right: 24px;
   padding: 16px;
   border-radius: 14px;
   z-index: 20;
