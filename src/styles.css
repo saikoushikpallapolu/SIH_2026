@@ -1574,3 +1574,796 @@ button {
   color: #cddc39;
 }
 
+/* ==========================================================================
+   REGIONAL 3D DEEP DIVE & SELECTION SYSTEM STYLES
+   ========================================================================== */
+
+/* Area Selector 3D HTML Badges on Globe */
+.corner-tag-reticle {
+  background: rgba(4, 18, 32, 0.88);
+  border: 1px solid #00f2fe;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: #e0f7fa;
+  box-shadow: 0 0 14px rgba(0, 242, 254, 0.5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.corner-tag-reticle small {
+  color: #80deea;
+  font-size: 8.5px;
+  font-family: 'DM Mono', monospace;
+}
+
+.selection-dimension-badge {
+  background: rgba(3, 16, 28, 0.92);
+  border: 1px solid #00ffff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), 0 0 12px rgba(0, 255, 255, 0.35);
+  pointer-events: none;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.selection-dimension-badge .dim-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #00ffff;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+
+.selection-dimension-badge .dim-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 9.5px;
+  color: #b2ebf2;
+}
+
+.selection-dimension-badge .dim-coords {
+  font-family: 'DM Mono', monospace;
+  color: #80deea;
+  font-size: 8.5px;
+}
+
+/* Floating Region Selection Toolbar on Globe */
+.area-selector-toolbar {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 30px;
+  background: rgba(5, 22, 38, 0.85);
+  border: 1px solid rgba(0, 242, 254, 0.3);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 20;
+  backdrop-filter: blur(16px);
+}
+
+.draw-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background: rgba(0, 229, 255, 0.15);
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  transition: all 0.2s ease;
+}
+
+.draw-toggle-btn:hover {
+  background: rgba(0, 229, 255, 0.28);
+  border-color: #00e5ff;
+}
+
+.draw-toggle-btn.active {
+  background: #00e5ff;
+  color: #031424;
+  box-shadow: 0 0 16px rgba(0, 229, 255, 0.6);
+}
+
+.area-guide-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.draw-instructions {
+  font-size: 11px;
+  color: #e0f7fa;
+  font-weight: 500;
+  padding: 0 4px;
+}
+
+.benchmark-chips-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  padding-left: 8px;
+}
+
+.benchmark-chip {
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #c9e4ee;
+  white-space: nowrap;
+  transition: all 0.18s;
+}
+
+.benchmark-chip:hover {
+  background: rgba(0, 242, 254, 0.15);
+  color: #00f2fe;
+  border-color: rgba(0, 242, 254, 0.35);
+}
+
+.benchmark-chip.active {
+  background: rgba(0, 242, 254, 0.25);
+  border-color: #00f2fe;
+  color: #ffffff;
+}
+
+/* Floating Selected Region Action Card on Globe */
+.selected-region-card {
+  position: absolute;
+  bottom: 110px;
+  right: 24px;
+  width: 320px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(4, 19, 34, 0.88);
+  border: 1px solid rgba(0, 242, 254, 0.35);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 20px rgba(0, 242, 254, 0.18);
+  z-index: 15;
+  backdrop-filter: blur(20px);
+}
+
+.selected-region-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.selected-region-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #00f2fe;
+}
+
+.selected-region-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.region-stat-item {
+  background: rgba(2, 10, 18, 0.5);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.region-stat-item label {
+  display: block;
+  font-size: 9px;
+  color: #78a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.region-stat-item strong {
+  font-size: 12px;
+  color: #e0f7fa;
+  font-family: 'DM Mono', monospace;
+}
+
+.selected-region-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.dive-now-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: linear-gradient(135deg, #00f2fe 0%, #0099ff 100%);
+  color: #020c17;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  box-shadow: 0 0 16px rgba(0, 242, 254, 0.4);
+  transition: all 0.2s ease;
+}
+
+.dive-now-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(0, 242, 254, 0.6);
+}
+
+.dive-now-btn.disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: #6d93a8;
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.clear-region-btn {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  font-size: 11px;
+  color: #9cbacf;
+  transition: all 0.18s;
+}
+
+.clear-region-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+/* ==========================================================================
+   DEEP DIVE 3D DIGITAL TWIN BLOCK COMPONENT STYLES
+   ========================================================================== */
+.deep-dive-container {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #030b17;
+}
+
+/* Top Floating HUD Header */
+.deep-dive-hud-header {
+  position: absolute;
+  top: 78px;
+  left: 24px;
+  right: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.deep-dive-hud-header > * {
+  pointer-events: auto;
+}
+
+.hud-title-block {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(3, 15, 28, 0.85);
+  padding: 8px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 242, 254, 0.25);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.back-globe-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(0, 242, 254, 0.15);
+  border: 1px solid rgba(0, 242, 254, 0.4);
+  color: #00f2fe;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.18s ease;
+}
+
+.back-globe-btn:hover {
+  background: #00f2fe;
+  color: #031424;
+}
+
+.hud-region-info h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.2px;
+}
+
+.hud-region-info .provenance-tag {
+  margin: 2px 0 0 0;
+  font-size: 10px;
+  color: #78a3b8;
+  font-family: 'DM Mono', monospace;
+}
+
+.hud-quick-stats {
+  display: flex;
+  gap: 8px;
+}
+
+.stat-pill {
+  background: rgba(3, 15, 28, 0.85);
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.stat-pill label {
+  font-size: 8.5px;
+  text-transform: uppercase;
+  color: #6d93a8;
+  letter-spacing: 0.5px;
+}
+
+.stat-pill span {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+  font-family: 'DM Mono', monospace;
+}
+
+.stat-pill .elev-pos {
+  color: #66bb6a;
+}
+
+.stat-pill .elev-neg {
+  color: #29b6f6;
+}
+
+/* Controls Panel (Bottom Left) */
+.deep-dive-controls-card {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  width: 320px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(3, 15, 28, 0.88);
+  border: 1px solid rgba(0, 242, 254, 0.22);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  z-index: 10;
+}
+
+.control-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.control-row label {
+  font-size: 11.5px;
+  color: #b2d5e5;
+  display: flex;
+  justify-content: space-between;
+}
+
+.control-row label strong {
+  color: #00f2fe;
+  font-family: 'DM Mono', monospace;
+}
+
+.control-row input[type='range'] {
+  width: 100%;
+  accent-color: #00f2fe;
+  height: 4px;
+}
+
+.control-row small {
+  font-size: 9px;
+  color: #688fa3;
+  line-height: 1.3;
+}
+
+.toggles-row {
+  display: flex;
+  gap: 8px;
+}
+
+.hud-toggle {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #a4c4d4;
+  transition: all 0.18s;
+  text-align: center;
+}
+
+.hud-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.hud-toggle.active {
+  background: rgba(0, 242, 254, 0.2);
+  border-color: #00f2fe;
+  color: #00f2fe;
+}
+
+/* Explicit Coordinate Probe Telemetry Card (Bottom Right) */
+.deep-dive-probe-card {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  width: 330px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(3, 15, 28, 0.92);
+  border: 1px solid rgba(0, 242, 254, 0.3);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  z-index: 10;
+}
+
+.deep-dive-probe-card .probe-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.deep-dive-probe-card .probe-header h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #00f2fe;
+  letter-spacing: 0.3px;
+}
+
+.probe-coords {
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  color: #80deea;
+}
+
+.probe-elev-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(2, 9, 18, 0.6);
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.probe-type {
+  font-size: 10px;
+  color: #88afc2;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.probe-meters {
+  font-size: 15px;
+  font-weight: 800;
+  font-family: 'DM Mono', monospace;
+}
+
+.probe-meters.pos {
+  color: #66bb6a;
+}
+
+.probe-meters.neg {
+  color: #29b6f6;
+}
+
+.probe-loading {
+  font-size: 11px;
+  color: #80deea;
+  font-style: italic;
+  padding: 10px 0;
+  text-align: center;
+}
+
+.probe-ctd-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.land-note {
+  font-size: 10.5px;
+  color: #81c784;
+  background: rgba(76, 175, 80, 0.12);
+  border: 1px solid rgba(76, 175, 80, 0.28);
+  padding: 8px 10px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.gradient-badge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.gradient-badge .label {
+  color: #7aa1b4;
+}
+
+.gradient-badge strong {
+  color: #e0f7fa;
+}
+
+.gradient-badge strong.highlight {
+  color: #ffd54f;
+}
+
+.gradient-badge .grad-metric {
+  color: #ffd54f;
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+}
+
+.ctd-mini-table {
+  margin-top: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 9.5px;
+}
+
+.ctd-mini-table .table-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px 8px;
+  font-weight: 600;
+  color: #8cb5c8;
+}
+
+.ctd-mini-table .table-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  padding: 3px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  font-family: 'DM Mono', monospace;
+  color: #e0f7fa;
+}
+
+/* Floating Real-Time Swimmer / Diver Telemetry Card */
+.deep-dive-swimmer-card {
+  position: absolute;
+  top: 148px;
+  right: 24px;
+  width: 220px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(3, 15, 28, 0.88);
+  border: 1px solid rgba(0, 242, 254, 0.3);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  z-index: 10;
+}
+
+.swimmer-status-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: #79aabf;
+  margin-bottom: 8px;
+}
+
+.swimmer-status-tag .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.swimmer-status-tag .status-dot.submerged {
+  background: #00f2fe;
+  box-shadow: 0 0 8px #00f2fe;
+}
+
+.swimmer-status-tag .status-dot.surface {
+  background: #66bb6a;
+  box-shadow: 0 0 8px #66bb6a;
+}
+
+.swimmer-metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  background: rgba(2, 9, 18, 0.65);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.swimmer-metric-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.swimmer-metric-item label {
+  font-size: 8px;
+  text-transform: uppercase;
+  color: #688fa3;
+  letter-spacing: 0.5px;
+}
+
+.swimmer-metric-item strong {
+  font-family: 'DM Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 1px;
+}
+
+.swimmer-metric-item strong.depth-val {
+  color: #00f2fe;
+}
+
+.swimmer-metric-item strong.alt-val {
+  color: #81c784;
+}
+
+.swimmer-metric-item strong.temp-val {
+  color: #ffd54f;
+}
+
+.swimmer-coords {
+  margin-top: 6px;
+  font-family: 'DM Mono', monospace;
+  font-size: 9.5px;
+  color: #89b4c8;
+  text-align: right;
+}
+
+/* Keybinding Helper Guide (Bottom Center) */
+.deep-dive-keys-guide {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-radius: 30px;
+  background: rgba(3, 15, 28, 0.9);
+  border: 1px solid rgba(0, 242, 254, 0.28);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.6);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.keys-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.key-cap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: 'DM Mono', monospace;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #b0d4e3;
+  transition: all 0.12s ease;
+}
+
+.key-cap.active {
+  background: #00f2fe;
+  border-color: #00f2fe;
+  color: #031424;
+  box-shadow: 0 0 10px rgba(0, 242, 254, 0.8);
+  transform: scale(1.08);
+}
+
+.key-action {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #92b8cb;
+  margin-left: 2px;
+}
+
+.key-divider {
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.key-hint {
+  font-size: 10.5px;
+  color: #688fa3;
+}
+
+/* Deep Dive Loading State Overlay */
+.deep-dive-loader {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  background: rgba(3, 15, 28, 0.92);
+  border: 1px solid rgba(0, 242, 254, 0.4);
+  padding: 24px 32px;
+  border-radius: 16px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(20px);
+  z-index: 20;
+  pointer-events: none;
+}
+
+.loader-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(0, 242, 254, 0.2);
+  border-top-color: #00f2fe;
+  border-radius: 50%;
+  animation: deepDiveSpin 0.85s linear infinite;
+}
+
+@keyframes deepDiveSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.deep-dive-loader span {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e0f7fa;
+  letter-spacing: 0.2px;
+}
+
+
+
+

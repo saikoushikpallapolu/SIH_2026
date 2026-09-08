@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from functools import lru_cache
+import struct
 
 ROOT = Path(__file__).resolve().parents[2]
 PROCESSED_DIR = ROOT / "data" / "processed"
@@ -453,3 +455,395 @@ def bathymetry_info() -> dict:
     if meta_path.exists():
         return json.loads(meta_path.read_text(encoding="utf-8"))
     raise HTTPException(status_code=404, detail="Bathymetry not found. Run fetch_bathymetry.py.")
+
+
+def bilinear_slice_2d(
+    grid_data: np.ndarray,
+    min_lat: float,
+    max_lat: float,
+    min_lon: float,
+    max_lon: float,
+    grid_res: int = 96,
+) -> np.ndarray:
+    """Vectorized bilinear interpolation of a 2D (N_LAT, N_LON) grid onto (grid_res, grid_res)."""
+    lats = np.linspace(min_lat, max_lat, grid_res, dtype=np.float32)
+    lons = np.linspace(min_lon, max_lon, grid_res, dtype=np.float32)
+
+    i_float = (lats - LAT_MIN) / (LAT_MAX - LAT_MIN) * (N_LAT - 1)
+    i0 = np.clip(np.floor(i_float).astype(np.int32), 0, N_LAT - 2)
+    i1 = i0 + 1
+    fy = (i_float - i0).astype(np.float32)
+
+    j_float = (lons - LON_MIN) / (LON_MAX - LON_MIN) * (N_LON - 1)
+    j0 = np.clip(np.floor(j_float).astype(np.int32), 0, N_LON - 2)
+    j1 = j0 + 1
+    fx = (j_float - j0).astype(np.float32)
+
+    w00 = (1.0 - fy)[:, None] * (1.0 - fx)[None, :]
+    w10 = (1.0 - fy)[:, None] * fx[None, :]
+    w01 = fy[:, None] * (1.0 - fx)[None, :]
+    w11 = fy[:, None] * fx[None, :]
+
+    sliced = (
+        w00 * grid_data[i0[:, None], j0[None, :]]
+        + w10 * grid_data[i0[:, None], j1[None, :]]
+        + w01 * grid_data[i1[:, None], j0[None, :]]
+        + w11 * grid_data[i1[:, None], j1[None, :]]
+    )
+    return sliced.astype(np.float32)
+
+
+def extract_isoline_segments(
+    grid: np.ndarray,
+    min_lat: float,
+    max_lat: float,
+    min_lon: float,
+    max_lon: float,
+    iso_val: float = 0.0,
+    max_segments: int = 400,
+) -> list[list[list[float]]]:
+    """Extract 2D line segments where grid values cross iso_val using 2D marching squares."""
+    nr, nc = grid.shape
+    lats = np.linspace(min_lat, max_lat, nr)
+    lons = np.linspace(min_lon, max_lon, nc)
+    segments: list[list[list[float]]] = []
+
+    for r in range(nr - 1):
+        for c in range(nc - 1):
+            z00 = float(grid[r, c]) - iso_val
+            z01 = float(grid[r, c + 1]) - iso_val
+            z10 = float(grid[r + 1, c]) - iso_val
+            z11 = float(grid[r + 1, c + 1]) - iso_val
+
+            if (z00 > 0 and z01 > 0 and z10 > 0 and z11 > 0) or (z00 <= 0 and z01 <= 0 and z10 <= 0 and z11 <= 0):
+                continue
+
+            pts: list[list[float]] = []
+            if (z00 > 0) != (z01 > 0):
+                t = -z00 / (z01 - z00) if z01 != z00 else 0.5
+                pts.append([round(float(lats[r]), 4), round(float(lons[c] + t * (lons[c + 1] - lons[c])), 4)])
+            if (z01 > 0) != (z11 > 0):
+                t = -z01 / (z11 - z01) if z11 != z01 else 0.5
+                pts.append([round(float(lats[r] + t * (lats[r + 1] - lats[r])), 4), round(float(lons[c + 1]), 4)])
+            if (z10 > 0) != (z11 > 0):
+                t = -z10 / (z11 - z10) if z11 != z10 else 0.5
+                pts.append([round(float(lats[r + 1]), 4), round(float(lons[c] + t * (lons[c + 1] - lons[c])), 4)])
+            if (z00 > 0) != (z10 > 0):
+                t = -z00 / (z10 - z00) if z10 != z00 else 0.5
+                pts.append([round(float(lats[r] + t * (lats[r + 1] - lats[r])), 4), round(float(lons[c]), 4)])
+
+            if len(pts) == 2:
+                segments.append(pts)
+                if len(segments) >= max_segments:
+                    return segments
+            elif len(pts) == 4:
+                segments.append([pts[0], pts[1]])
+                segments.append([pts[2], pts[3]])
+                if len(segments) >= max_segments:
+                    return segments
+
+    return segments
+
+
+@app.get("/api/terrain/elevation-slice", response_model=None)
+def elevation_slice(
+    min_lat: float = Query(..., ge=-60.0, le=40.0),
+    max_lat: float = Query(..., ge=-60.0, le=40.0),
+    min_lon: float = Query(..., ge=15.0, le=135.0),
+    max_lon: float = Query(..., ge=15.0, le=135.0),
+    grid_res: int = Query(96, ge=16, le=256),
+    format: str = Query("json", pattern="^(json|bin)$"),
+) -> Response | dict:
+    """Return high-resolution elevation & bathymetry slice from NOAA ETOPO 2022 bedrock grid.
+
+    Supports both binary transport (32-byte header + Float32 array) and JSON.
+    """
+    if min_lat >= max_lat or min_lon >= max_lon:
+        raise HTTPException(status_code=400, detail="Invalid coordinates: min must be strictly less than max.")
+
+    bath = get_bath_memmap()
+    if bath is None:
+        raise HTTPException(status_code=503, detail="Bathymetry dataset unavailable. Run fetch_bathymetry.py.")
+
+    grid = bilinear_slice_2d(bath, min_lat, max_lat, min_lon, max_lon, grid_res)
+    min_elev = float(np.min(grid))
+    max_elev = float(np.max(grid))
+
+    if format == "bin":
+        # 32-byte header:
+        # Magic: b"OCEA" (4B), Version: 1 (uint16), GridRes: uint16,
+        # min_lat, max_lat, min_lon, max_lon, min_elev, max_elev (6 x float32)
+        header = struct.pack(
+            "<4sHHffffff",
+            b"OCEA",
+            1,
+            grid_res,
+            float(min_lat),
+            float(max_lat),
+            float(min_lon),
+            float(max_lon),
+            float(min_elev),
+            float(max_elev),
+        )
+        return Response(
+            content=header + grid.tobytes(),
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
+
+    # JSON fallback with coastline and contour metadata
+    coastline_segments = extract_isoline_segments(grid, min_lat, max_lat, min_lon, max_lon, 0.0, 300)
+    shelf_break_segments = extract_isoline_segments(grid, min_lat, max_lat, min_lon, max_lon, -200.0, 200)
+
+    return {
+        "dataset": "NOAA NCEI ETOPO 2022 (Bedrock & Ice Surface)",
+        "native_resolution_deg": 0.25,
+        "native_resolution_km_equator": 27.7,
+        "grid_res": grid_res,
+        "bounds": {
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon,
+        },
+        "min_elevation_m": round(min_elev, 1),
+        "max_elevation_m": round(max_elev, 1),
+        "land_fraction": round(float(np.mean(grid >= 0.0)), 4),
+        "ocean_fraction": round(float(np.mean(grid < 0.0)), 4),
+        "elevation_grid": [[round(float(v), 1) for v in row] for row in grid],
+        "coastline_segments": coastline_segments,
+        "shelf_break_segments": shelf_break_segments,
+        "key_isobaths_m": [-50, -200, -1000, -2000, -4000],
+        "disclaimer": "Coastline and bathymetry are derived from NOAA ETOPO 2022 at native 0.25-degree resolution. Grid resampling increases vertex mesh sampling density for rendering without synthesizing unmeasured sub-kilometer features.",
+    }
+
+
+@app.get("/api/ocean/slice", response_model=None)
+def ocean_slice(
+    variable: str = Query(..., pattern="^(temperature|salinity|currents_u|currents_v|chlorophyll)$"),
+    min_lat: float = Query(..., ge=-60.0, le=40.0),
+    max_lat: float = Query(..., ge=-60.0, le=40.0),
+    min_lon: float = Query(..., ge=15.0, le=135.0),
+    max_lon: float = Query(..., ge=15.0, le=135.0),
+    depth: float = Query(0.0, ge=0.0, le=6000.0),
+    month: int = Query(292, ge=0, le=299),
+    grid_res: int = Query(48, ge=16, le=128),
+    format: str = Query("json", pattern="^(json|bin)$"),
+) -> Response | dict:
+    """Return a 2D dynamic oceanographic data slice for the selected bounding box."""
+    if min_lat >= max_lat or min_lon >= max_lon:
+        raise HTTPException(status_code=400, detail="Invalid coordinates.")
+
+    month_idx = max(0, min(month, 299))
+    bath = get_bath_memmap()
+    bath_slice = bilinear_slice_2d(bath, min_lat, max_lat, min_lon, max_lon, grid_res) if bath is not None else None
+
+    # Determine depth level index
+    k_idx = 0
+    min_dist = float("inf")
+    for idx, d in enumerate(DEPTH_LEVELS):
+        if abs(d - depth) < min_dist:
+            min_dist = abs(d - depth)
+            k_idx = idx
+
+    raw_2d: np.ndarray | None = None
+    units = "°C"
+
+    if variable == "temperature":
+        temp_mem = get_temp_memmap()
+        if temp_mem is not None:
+            raw_2d = temp_mem[month_idx, k_idx].astype(np.float32)
+            units = "°C"
+    elif variable == "salinity":
+        sal_mem = get_sal_memmap()
+        if sal_mem is not None:
+            raw_2d = sal_mem[month_idx, k_idx].astype(np.float32)
+            units = "PSU"
+    elif variable == "currents_u":
+        u_mem = get_u_memmap()
+        if u_mem is not None:
+            raw_2d = u_mem[month_idx].astype(np.float32)
+            units = "m/s"
+    elif variable == "currents_v":
+        v_mem = get_v_memmap()
+        if v_mem is not None:
+            raw_2d = v_mem[month_idx].astype(np.float32)
+            units = "m/s"
+    elif variable == "chlorophyll":
+        chl_mem = get_chl_memmap()
+        if chl_mem is not None:
+            raw_2d = chl_mem[month_idx].astype(np.float32)
+            units = "mg/m³"
+
+    if raw_2d is None:
+        raise HTTPException(status_code=503, detail=f"Dataset for {variable} unavailable.")
+
+    slice_grid = bilinear_slice_2d(raw_2d, min_lat, max_lat, min_lon, max_lon, grid_res)
+
+    # Bedrock cut-off masking: cells on land or deeper than local seabed are masked
+    if bath_slice is not None:
+        seabed_depth = -bath_slice
+        mask = (bath_slice >= 0.0) | (seabed_depth < (depth - 25.0))
+        slice_grid[mask] = np.nan
+
+    valid_vals = slice_grid[~np.isnan(slice_grid)]
+    min_val = float(np.min(valid_vals)) if len(valid_vals) > 0 else 0.0
+    max_val = float(np.max(valid_vals)) if len(valid_vals) > 0 else 0.0
+
+    if format == "bin":
+        # Binary representation: NaN replaced by -9999.0f
+        export_grid = np.nan_to_num(slice_grid, nan=-9999.0).astype(np.float32)
+        header = struct.pack(
+            "<4sHHffffff",
+            b"OCEA",
+            2,
+            grid_res,
+            float(min_lat),
+            float(max_lat),
+            float(min_lon),
+            float(max_lon),
+            float(min_val),
+            float(max_val),
+        )
+        return Response(content=header + export_grid.tobytes(), media_type="application/octet-stream")
+
+    return {
+        "variable": variable,
+        "units": units,
+        "depth_m": DEPTH_LEVELS[k_idx] if variable in ("temperature", "salinity") else 0,
+        "month_index": month_idx,
+        "grid_res": grid_res,
+        "min_val": round(min_val, 2),
+        "max_val": round(max_val, 2),
+        "grid": [[None if np.isnan(v) else round(float(v), 2) for v in row] for row in slice_grid],
+        "provenance": {
+            "source": "INCOIS / Copernicus GLORYS 25-Year Reanalysis",
+            "spatial_resolution_deg": 0.25,
+            "temporal_resolution": "Monthly mean",
+        },
+    }
+
+
+@app.get("/api/ocean/profile")
+def ocean_profile(
+    lat: float = Query(..., ge=-60.0, le=40.0),
+    lon: float = Query(..., ge=15.0, le=135.0),
+    month: int = Query(292, ge=0, le=299),
+) -> dict:
+    """Return explicit multi-level CTD depth profile at a user-selected geographic point.
+
+    Performs quantitative vertical gradient analysis (dT/dz, dS/dz). Features are strictly labeled
+    as 'Thermocline' or 'Halocline' only when quantitative physical gradient criteria are met.
+    """
+    i0, i1, j0, j1, w00, w10, w01, w11 = bilinear_weights(lat, lon)
+    month_idx = max(0, min(month, 299))
+
+    # 1. Physical seabed depth / land elevation check
+    elevation = -3500.0
+    bath = get_bath_memmap()
+    if bath is not None:
+        elevation = float(w00 * bath[i0, j0] + w10 * bath[i0, j1] + w01 * bath[i1, j0] + w11 * bath[i1, j1])
+
+    is_land = elevation >= 0.0
+    if is_land:
+        return {
+            "is_land": True,
+            "coordinate": {"lat": round(lat, 4), "lon": round(lon, 4)},
+            "elevation_m": round(elevation, 1),
+            "status": "continental_landmass",
+            "message": "Selected coordinate is on land. No marine water column profile present.",
+        }
+
+    seabed_depth_m = round(-elevation, 1)
+
+    # 2. Query 16-level temperature & salinity cubes
+    temp_mem = get_temp_memmap()
+    sal_mem = get_sal_memmap()
+
+    levels: list[dict[str, Any]] = []
+    valid_temps: list[tuple[float, float]] = []  # (depth_m, temp_c)
+    valid_sals: list[tuple[float, float]] = []
+
+    for k in range(16):
+        d_m = DEPTH_LEVELS[k]
+        in_water_column = d_m <= (seabed_depth_m + 35.0)
+
+        temp_c: float | None = None
+        sal_psu: float | None = None
+
+        if in_water_column:
+            if temp_mem is not None:
+                t = float(w00 * temp_mem[month_idx, k, i0, j0] + w10 * temp_mem[month_idx, k, i0, j1] + w01 * temp_mem[month_idx, k, i1, j0] + w11 * temp_mem[month_idx, k, i1, j1])
+                temp_c = round(t, 2)
+                valid_temps.append((d_m, temp_c))
+
+            if sal_mem is not None:
+                s = float(w00 * sal_mem[month_idx, k, i0, j0] + w10 * sal_mem[month_idx, k, i0, j1] + w01 * sal_mem[month_idx, k, i1, j0] + w11 * sal_mem[month_idx, k, i1, j1])
+                sal_psu = round(s, 2)
+                valid_sals.append((d_m, sal_psu))
+
+        levels.append({
+            "depth_m": d_m,
+            "in_water_column": in_water_column,
+            "temperature_c": temp_c,
+            "salinity_psu": sal_psu,
+            "bedrock_cutoff": not in_water_column,
+        })
+
+    # 3. Quantitative vertical gradient analysis (Thermocline & Halocline)
+    max_dT_dz = 0.0
+    thermocline_range: list[float] | None = None
+    if len(valid_temps) >= 3:
+        for i in range(len(valid_temps) - 1):
+            z1, t1 = valid_temps[i]
+            z2, t2 = valid_temps[i + 1]
+            dz = z2 - z1
+            if dz > 0:
+                grad = abs((t2 - t1) / dz)
+                if grad > max_dT_dz:
+                    max_dT_dz = grad
+                    if grad >= 0.05:  # Standard physical oceanographic threshold: 0.05 °C / meter
+                        thermocline_range = [z1, z2]
+
+    thermocline_detected = max_dT_dz >= 0.05 and thermocline_range is not None
+
+    max_dS_dz = 0.0
+    halocline_range: list[float] | None = None
+    if len(valid_sals) >= 3:
+        for i in range(len(valid_sals) - 1):
+            z1, s1 = valid_sals[i]
+            z2, s2 = valid_sals[i + 1]
+            dz = z2 - z1
+            if dz > 0:
+                grad = abs((s2 - s1) / dz)
+                if grad > max_dS_dz:
+                    max_dS_dz = grad
+                    if grad >= 0.02:  # Threshold: 0.02 PSU / meter
+                        halocline_range = [z1, z2]
+
+    halocline_detected = max_dS_dz >= 0.02 and halocline_range is not None
+
+    return {
+        "is_land": False,
+        "coordinate": {"lat": round(lat, 4), "lon": round(lon, 4)},
+        "seabed_depth_m": seabed_depth_m,
+        "month_index": month_idx,
+        "levels": levels,
+        "thermocline": {
+            "detected": thermocline_detected,
+            "classification": "Thermocline" if thermocline_detected else "Temperature Profile",
+            "max_gradient_c_per_m": round(max_dT_dz, 4),
+            "depth_range_m": thermocline_range,
+        },
+        "halocline": {
+            "detected": halocline_detected,
+            "classification": "Halocline" if halocline_detected else "Salinity Profile",
+            "max_gradient_psu_per_m": round(max_dS_dz, 4),
+            "depth_range_m": halocline_range,
+        },
+        "provenance": {
+            "source": "INCOIS / Copernicus GLORYS 25-Year Reanalysis",
+            "bathymetry_source": "NOAA ETOPO 2022 (0.25° native resolution)",
+        },
+    }
+

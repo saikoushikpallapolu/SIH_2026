@@ -21,8 +21,10 @@ import type {
   Selection,
   TsunamiScenario,
   ViewMode,
+  SpatialBoundary,
 } from './types'
 import OceanCurrentFlow from './OceanCurrentFlow'
+import GlobeAreaSelector from './GlobeAreaSelector'
 
 const RADIUS = GLOBE_RADIUS
 const EARTH_DAY_MAP = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'
@@ -911,10 +913,16 @@ export interface GlobeSceneProps {
   tsunamiHour?: number
   selectedStation?: CoastalStation | null
   tsunamiScenario?: TsunamiScenario
+  isSelectingArea?: boolean
+  activeBoundary?: SpatialBoundary | null
+  anchorCorner?: { latitude: number; longitude: number } | null
+  hoverCorner?: { latitude: number; longitude: number } | null
   onInstrument: (instrument: Instrument) => void
-  onSelectPoint: (selection: Selection) => void
+  onSelectPoint?: (selection: Selection) => void
   onSelectStation?: (station: CoastalStation) => void
   onSelectCurrentSystem?: (sys: CurrentSystem) => void
+  onAreaCornerSelect?: (coord: { latitude: number; longitude: number }) => void
+  onAreaHover?: (coord: { latitude: number; longitude: number }) => void
 }
 
 function IndianOceanSectorBoundary() {
@@ -972,19 +980,32 @@ function Scene({
   showIsochrones = true,
   tsunamiHour = 2.0,
   tsunamiScenario = TSUNAMI_HISTORIC_DATA,
+  isSelectingArea = false,
+  activeBoundary = null,
+  anchorCorner = null,
+  hoverCorner = null,
   onInstrument,
   onSelectPoint,
   onSelectStation,
   onSelectCurrentSystem,
+  onAreaCornerSelect,
+  onAreaHover,
 }: GlobeSceneProps) {
   const groupRef = useRef<THREE.Group>(null)
 
   const handleGlobeClick = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation()
-    if (!groupRef.current) return
+    if (!groupRef.current || !onAreaCornerSelect) return
     const localPoint = groupRef.current.worldToLocal(event.point.clone())
     const coord = vector3ToLatLng(localPoint)
-    onSelectPoint(coord)
+    onAreaCornerSelect(coord)
+  }
+
+  const handleGlobePointerMove = (event: ThreeEvent<PointerEvent>) => {
+    if (!onAreaHover || !groupRef.current) return
+    const localPoint = groupRef.current.worldToLocal(event.point.clone())
+    const coord = vector3ToLatLng(localPoint)
+    onAreaHover(coord)
   }
 
   // Strict mode isolation: when in Tsunami mode, NEVER render currents layers
@@ -1015,8 +1036,19 @@ function Scene({
           tsunamiHour={tsunamiHour}
         />
 
-        {/* Invisible raycast sphere */}
-        <mesh onClick={handleGlobeClick}>
+        {/* Interactive Bounding Box / Area Selector */}
+        <GlobeAreaSelector
+          activeBoundary={activeBoundary}
+          anchorCorner={anchorCorner}
+          hoverCorner={hoverCorner}
+          isSelecting={isSelectingArea}
+        />
+
+        {/* Invisible raycast sphere for clicks and precision hover */}
+        <mesh
+          onClick={handleGlobeClick}
+          onPointerMove={handleGlobePointerMove}
+        >
           <sphereGeometry args={[RADIUS + 0.008, 96, 96]} />
           <meshBasicMaterial transparent opacity={0} />
         </mesh>
@@ -1069,9 +1101,6 @@ function Scene({
           instruments.map((instrument) => (
             <Marker key={instrument.id} instrument={instrument} onSelect={onInstrument} />
           ))}
-
-        {/* Holographic Sonar Beacon at clicked coordinate */}
-        <HolographicBeacon selection={selection} />
       </group>
 
       <Atmosphere />
