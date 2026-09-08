@@ -1,0 +1,676 @@
+{
+  "manifest_version": "1.0.0",
+  "data_state_version": "OCEANSCOPE_DATA_STATE_2026-09-08",
+  "audit_timestamp": "2026-09-08T07:45:00Z",
+  "project": "OceanScope India (SIH 2026)",
+  "git_commit": "29b897e2aa6ae349a2d244b3e5d69016b71382ae",
+  "repository_url": "https://github.com/saikoushikpallapolu/SIH_2026.git",
+  "target_geographic_bounds": {
+    "lat_min": -45.0,
+    "lat_max": 32.0,
+    "lon_min": 20.0,
+    "lon_max": 125.0,
+    "description": "Indian Ocean Basin including Arabian Sea, Bay of Bengal, and Southern Indian Ocean"
+  },
+  "environment": {
+    "os": "Windows 11 AMD64",
+    "python_version": "3.13.6 (tags/v3.13.6:4e66535, Aug  6 2025, 14:36:00) [MSC v.1944 64 bit (AMD64)]",
+    "packages": {
+      "xarray": "2026.7.0",
+      "netCDF4": "1.7.4",
+      "numpy": "2.2.6",
+      "scipy": "1.16.2",
+      "pandas": "2.3.1"
+    },
+    "credentials_policy": "NOAA and ESA CCI datasets are open-access public data requiring no authentication. Argovis API token is optional (higher rate limits); obtain through Argovis official registration."
+  },
+  "vault_filesystem_summary": {
+    "total_files": 155,
+    "total_bytes": 2787990100,
+    "total_megabytes": 2658.83,
+    "total_gigabytes": 2.6,
+    "raw_directory": "data/raw/real",
+    "raw_files": 122,
+    "raw_bytes": 1087216160,
+    "processed_directory": "data/processed/real",
+    "processed_files": 33,
+    "processed_bytes": 1700773940
+  },
+  "datasets": {
+    "bathymetry": {
+      "dataset_id": "bathymetry_etopo_2022",
+      "status": "VERIFIED COMPLETE",
+      "provider": "NOAA National Centers for Environmental Information (NCEI)",
+      "product": "ETOPO 2022 Bedrock 60s Elevation Grid",
+      "source_endpoint": "https://www.ngdc.noaa.gov/thredds/dodsC/global/ETOPO2022/60s/60s_bed_elev_netcdf/ETOPO_2022_v1_60s_N90W180_bed.nc",
+      "access_method": "Direct NetCDF subset via OPeNDAP / NOAA NCEI",
+      "acquisition_script": "backend/scripts/complete_real_data.py",
+      "processing_script": "backend/scripts/complete_real_data.py",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "temporal_target": "Static bedrock topography",
+      "actual_temporal_coverage": "Static",
+      "spatial_resolution": "0.25 degree (regridded from 60 arc-second bedrock)",
+      "temporal_resolution": "Static",
+      "depth_levels": null,
+      "variables": [
+        "elevation"
+      ],
+      "units": "m",
+      "transformations": [
+        "Spatial bounding box slice to [-45, 32] lat and [20, 125] lon",
+        "Regridded to standard 0.25-deg resolution grid (309 x 421)",
+        "Converted to int16 binary format for fast WebGL and backend binary reads"
+      ],
+      "file_paths": [
+        "data/processed/real/bathymetry/bathymetry_io.bin",
+        "data/processed/real/bathymetry/bathymetry_metadata.json"
+      ],
+      "canonical_file": "data/processed/real/bathymetry/bathymetry_io.bin",
+      "file_size_bytes": 520356,
+      "sha256": "c8b2b2e5881f8faac694e11ad2da1911ebca4cd16ecf983464997d981a6c1b93",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Regridded to 0.25-deg resolution from 60-arcsec resolution to match ocean model grids. Features smaller than ~25 km are smoothed.",
+      "missing_coverage": "None",
+      "resume_instructions": "Dataset is complete. No resumption required."
+    },
+    "daily_sst": {
+      "dataset_id": "daily_sst_oisst_v2_1",
+      "status": "VERIFIED COMPLETE",
+      "provider": "NOAA National Centers for Environmental Information (NCEI)",
+      "product": "NOAA Daily Optimum Interpolation Sea Surface Temperature (OISST) v2.1",
+      "source_endpoint": "https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/{YYYYMM}/oisst-avhrr-v02r01.{YYYYMMDD}.nc",
+      "access_method": "Direct HTTPS download with parallel ThreadPoolExecutor workers",
+      "acquisition_script": "backend/scripts/fetch_ncei_daily_sst.py",
+      "processing_script": "backend/scripts/fetch_ncei_daily_sst.py",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -44.875,
+          31.875
+        ],
+        "lon": [
+          20.125,
+          124.875
+        ]
+      },
+      "temporal_target": "2020-01-01 to 2024-12-31 (~1,826 days)",
+      "actual_temporal_coverage": "2020-01-01 to 2024-12-31 (1,827 days continuous, leap year 2020 & 2024 included)",
+      "spatial_resolution": "0.25 degree (308 lat x 420 lon)",
+      "temporal_resolution": "Daily",
+      "depth_levels": [
+        0.0
+      ],
+      "variables": [
+        "tos_daily"
+      ],
+      "units": "degC",
+      "transformations": [
+        "Downloaded daily NetCDF files directly from official NOAA NCEI HTTPS archives",
+        "Cropped in-memory to Indian Ocean bounding box [lat: -45 to 32, lon: 20 to 125]",
+        "Standardized variable name 'sst' to 'tos_daily'",
+        "Saved yearly NetCDFs (2020, 2021, 2022, 2023, 2024) and merged master 5-year NetCDF"
+      ],
+      "file_paths": [
+        "data/processed/real/sst/sst_oisst_daily_standard.nc",
+        "data/processed/real/sst/yearly/sst_oisst_daily_2020_standard.nc",
+        "data/processed/real/sst/yearly/sst_oisst_daily_2021_standard.nc",
+        "data/processed/real/sst/yearly/sst_oisst_daily_2022_standard.nc",
+        "data/processed/real/sst/yearly/sst_oisst_daily_2023_standard.nc",
+        "data/processed/real/sst/yearly/sst_oisst_daily_2024_standard.nc"
+      ],
+      "canonical_file": "data/processed/real/sst/sst_oisst_daily_standard.nc",
+      "file_size_bytes": 168531039,
+      "sha256": "22cea38e8e0efb12259e12b33c757fdd817020b18d89666a990b2650713d7c1d",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Surface water temperature only (~top 1 meter). In-situ buoy calibration and satellite blending subject to satellite cloud cover.",
+      "missing_coverage": "None for the 2020-2024 5-year target period.",
+      "resume_instructions": "Dataset is complete for 2020-2024. To extend back to 2015, run `python backend/scripts/fetch_ncei_daily_sst.py --start-year 2015 --end-year 2019`."
+    },
+    "chlorophyll": {
+      "dataset_id": "chlorophyll_esa_cci_v6_0",
+      "status": "VERIFIED COMPLETE",
+      "provider": "European Space Agency (ESA) Ocean Colour Climate Change Initiative (CCI) v6.0 via NOAA OceanWatch ERDDAP",
+      "product": "ESA CCI Ocean Colour Monthly 4km Composites (Regridded to 0.25-deg)",
+      "source_endpoint": "https://oceanwatch.pifsc.noaa.gov/erddap/griddap/esa-cci-chla-monthly-v6-0.nc",
+      "access_method": "RESTful ERDDAP Griddap NetCDF query",
+      "acquisition_script": "backend/scripts/fetch_historical_chlorophyll.py",
+      "processing_script": "backend/scripts/fetch_historical_chlorophyll.py",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -45.02,
+          31.98
+        ],
+        "lon": [
+          20.02,
+          125.02
+        ]
+      },
+      "temporal_target": "Longest available historical period (1997-2024)",
+      "actual_temporal_coverage": "1998-01-01 to 2025-01-01 (325 continuous monthly composites across 27 years)",
+      "spatial_resolution": "0.25 degree (309 lat x 421 lon)",
+      "temporal_resolution": "Monthly",
+      "depth_levels": [
+        0.0
+      ],
+      "variables": [
+        "chl"
+      ],
+      "units": "mg/m^3",
+      "transformations": [
+        "Downloaded yearly subsets from NOAA OceanWatch ERDDAP",
+        "Regridded and cropped to standard 0.25-deg grid over Indian Ocean",
+        "Standardized variable 'chlor_a' to 'chl'",
+        "Compiled master 325-month NetCDF dataset with 27,192,542 verified non-empty physical observations"
+      ],
+      "file_paths": [
+        "data/processed/real/chlorophyll/chlorophyll_esa_cci_standard.nc",
+        "data/raw/real/chlorophyll/*.nc (27 yearly NetCDF files)"
+      ],
+      "canonical_file": "data/processed/real/chlorophyll/chlorophyll_esa_cci_standard.nc",
+      "file_size_bytes": 169145318,
+      "sha256": "8582f1ae1862e58ca773ed441052b6f7eb127d3be822766d2c3b64cd72891dc0",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Surface optical proxy derived from satellite ocean colour radiance (SeaWiFS, MODIS, MERIS, OLCI). Cannot observe phytoplankton below the photic zone (~top 30-50m). Cloud cover creates intermittent coastal gaps.",
+      "missing_coverage": "None for the 1998-2024 multi-decadal era.",
+      "resume_instructions": "Dataset is complete. No resumption required."
+    },
+    "sea_surface_height": {
+      "dataset_id": "ssh_godas_monthly",
+      "status": "VERIFIED COMPLETE",
+      "provider": "NOAA National Centers for Environmental Prediction (NCEP) / Physical Sciences Laboratory (PSL)",
+      "product": "Global Ocean Data Assimilation System (GODAS) Monthly Sea Surface Height Relative to Geoid (sshg)",
+      "source_endpoint": "https://psl.noaa.gov/thredds/dodsC/Datasets/godas/sshg.{YYYY}.nc",
+      "access_method": "OPeNDAP slice via xarray",
+      "acquisition_script": "backend/scripts/fetch_25yr_ssh_mld.py",
+      "processing_script": "backend/scripts/fetch_25yr_ssh_mld.py",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -44.83,
+          31.83
+        ],
+        "lon": [
+          20.5,
+          124.5
+        ]
+      },
+      "temporal_target": "2000-01 to 2024-12 (300 months)",
+      "actual_temporal_coverage": "2000-01-01 to 2024-12-01 (300 continuous months, all 25 years)",
+      "spatial_resolution": "1/3 degree latitude x 1 degree longitude (231 lat x 105 lon)",
+      "temporal_resolution": "Monthly",
+      "depth_levels": [
+        0.0
+      ],
+      "variables": [
+        "zos"
+      ],
+      "units": "m",
+      "transformations": [
+        "Slices along time, lat, and lon on PSL THREDDS",
+        "Renamed variable 'sshg' to CF-standard 'zos'",
+        "Concatenated 25 annual NetCDFs into single master dataset"
+      ],
+      "file_paths": [
+        "data/processed/real/ssh/ssh_godas_monthly_standard.nc"
+      ],
+      "canonical_file": "data/processed/real/ssh/ssh_godas_monthly_standard.nc",
+      "file_size_bytes": 29128795,
+      "sha256": "d5ae10a04bfa5c88d7337779dd5668eb702dd0072d951f8d4de45e6742d309b8",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Model-assimilated reanalysis product (assimilating satellite altimetry and XBT/Argo data). Coarse zonal grid (1 degree).",
+      "missing_coverage": "None for 2000-2024.",
+      "resume_instructions": "Dataset is complete for 2000-2024. No resumption required."
+    },
+    "mixed_layer_depth": {
+      "dataset_id": "mld_godas_monthly",
+      "status": "VERIFIED COMPLETE",
+      "provider": "NOAA National Centers for Environmental Prediction (NCEP) / Physical Sciences Laboratory (PSL)",
+      "product": "Global Ocean Data Assimilation System (GODAS) Monthly Mixed Layer Depth (dbss_obml)",
+      "source_endpoint": "https://psl.noaa.gov/thredds/dodsC/Datasets/godas/dbss_obml.{YYYY}.nc",
+      "access_method": "OPeNDAP slice via xarray",
+      "acquisition_script": "backend/scripts/fetch_25yr_ssh_mld.py",
+      "processing_script": "backend/scripts/fetch_25yr_ssh_mld.py",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -44.83,
+          31.83
+        ],
+        "lon": [
+          20.5,
+          124.5
+        ]
+      },
+      "temporal_target": "2000-01 to 2024-12 (300 months)",
+      "actual_temporal_coverage": "2000-01-01 to 2024-12-01 (300 continuous months, all 25 years)",
+      "spatial_resolution": "1/3 degree latitude x 1 degree longitude (231 lat x 105 lon)",
+      "temporal_resolution": "Monthly",
+      "depth_levels": null,
+      "variables": [
+        "mlotst"
+      ],
+      "units": "m",
+      "transformations": [
+        "Slices along time, lat, and lon on PSL THREDDS",
+        "Renamed variable 'dbss_obml' to CF-standard 'mlotst'",
+        "Concatenated 25 annual NetCDFs into single master dataset"
+      ],
+      "file_paths": [
+        "data/processed/real/mld/mld_godas_monthly_standard.nc"
+      ],
+      "canonical_file": "data/processed/real/mld/mld_godas_monthly_standard.nc",
+      "file_size_bytes": 29128795,
+      "sha256": "8c0773c453a5b9ff6347f640df22b6d264202a3674a72902f76501db0778a792",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Model-assimilated reanalysis diagnostic based on potential density difference criteria. Not a direct in-situ measurement.",
+      "missing_coverage": "None for 2000-2024.",
+      "resume_instructions": "Dataset is complete for 2000-2024. No resumption required."
+    },
+    "in_situ_observations": {
+      "dataset_id": "in_situ_argo_gliders",
+      "status": "VERIFIED COMPLETE",
+      "provider": "Argo GDAC / Argovis API / IMOS Australian Ocean Data Network (AODN)",
+      "product": "Argo Core CTD Profiles, BGC-Argo Optical Profiles, and IMOS Ocean Glider Missions",
+      "source_endpoint": "https://argovis-api.colorado.edu/ and https://thredds.aodn.org.au/thredds/catalog/IMOS/ANFOG/",
+      "access_method": "Argovis REST API queries + HTTPS direct NetCDF downloads",
+      "acquisition_script": "backend/scripts/expand_real_observations.py",
+      "processing_script": "backend/scripts/expand_real_observations.py",
+      "requested_domain": "Indian Ocean sensor networks (Arabian Sea, Bay of Bengal, Equatorial IO, Southern IO)",
+      "actual_domain": "Indian Ocean basin transects",
+      "temporal_target": "Representative multi-year profiling",
+      "actual_temporal_coverage": "Argo profiles: 2018-05-12 to 2024-03-30; Gliders: Sept 2017 & March 2019 missions",
+      "spatial_resolution": "In-situ point observations",
+      "temporal_resolution": "Per-profile surfacing and glider dive cycles",
+      "depth_levels": "Profile depths 0 to 2000 meters",
+      "variables": [
+        "P",
+        "T",
+        "S",
+        "CHLA",
+        "DOXY",
+        "trajectory"
+      ],
+      "units": "dbar, degC, PSU, mg/m^3, micromol/kg",
+      "transformations": [
+        "Extracted Argovis JSON payloads and verified QC flags (flag 1 = good)",
+        "Extracted depth, temperature, salinity, chlorophyll-a, dissolved oxygen arrays",
+        "Downloaded IMOS ocean glider NetCDFs and parsed high-frequency dive fixes",
+        "Stored structured records into indexed SQLite database (oceanscope_real.db)"
+      ],
+      "file_paths": [
+        "data/processed/real/observations/oceanscope_real.db",
+        "data/raw/real/observations/*.json (72 raw profiles)",
+        "data/raw/real/gliders/*.nc (2 mission NetCDFs)"
+      ],
+      "canonical_file": "data/processed/real/observations/oceanscope_real.db",
+      "file_size_bytes": 778240,
+      "sha256": "be4c236162227a7e05e6040578a4b189654ef5d3d42eafcecbc67005f2652e5b",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "In-situ profiling floats and gliders provide Lagrangian, sparse spatial sampling along drift trajectories, not a regular continuous 3D grid.",
+      "missing_coverage": "Continuous global deployment expanding in real-time.",
+      "resume_instructions": "To ingest more profiles, run `python backend/scripts/expand_real_observations.py` with modified bounding dates or box parameters."
+    },
+    "temperature_3d": {
+      "dataset_id": "temperature_godas_3d",
+      "status": "VERIFIED PARTIAL",
+      "provider": "NOAA National Centers for Environmental Prediction (NCEP) / Physical Sciences Laboratory (PSL)",
+      "product": "Global Ocean Data Assimilation System (GODAS) Monthly 3D Potential Temperature (pottmp)",
+      "source_endpoint": "https://psl.noaa.gov/thredds/dodsC/Datasets/godas/pottmp.{YYYY}.nc",
+      "access_method": "Month-by-month OPeNDAP slice via xarray to prevent socket timeouts",
+      "acquisition_script": "backend/scripts/fetch_historical_godas_3d.py",
+      "processing_script": "backend/scripts/fetch_historical_godas_3d.py",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -44.83,
+          31.83
+        ],
+        "lon": [
+          20.5,
+          124.5
+        ]
+      },
+      "temporal_target": "2000-01 to 2024-12 (300 months, 25 years)",
+      "actual_temporal_coverage": "2022-01-01 to 2024-12-01 (36 continuous months, Years 2022, 2023, 2024)",
+      "spatial_resolution": "1/3 degree latitude x 1 degree longitude (231 lat x 105 lon)",
+      "temporal_resolution": "Monthly",
+      "depth_levels": [
+        5,
+        10,
+        25,
+        50,
+        75,
+        100,
+        150,
+        200,
+        300,
+        500,
+        750,
+        1000,
+        1500,
+        2000,
+        3000,
+        4000
+      ],
+      "variables": [
+        "thetao"
+      ],
+      "units": "degC",
+      "transformations": [
+        "Slices along time, lat, lon month-by-month to avoid PSL THREDDS socket truncation",
+        "Interpolates from raw 40 GODAS vertical levels to OceanScope 16 standard depths",
+        "Converts potential temperature from Kelvin to Celsius (val - 273.15)",
+        "Renames variable 'pottmp' to CF-compliant 'thetao'",
+        "Concatenates validated annual NetCDFs into master dataset"
+      ],
+      "file_paths": [
+        "data/processed/real/temperature/temperature_godas_monthly_standard.nc",
+        "data/processed/real/temperature/yearly/pottmp_godas_2022_standard.nc",
+        "data/processed/real/temperature/yearly/pottmp_godas_2023_standard.nc",
+        "data/processed/real/temperature/yearly/pottmp_godas_2024_standard.nc"
+      ],
+      "canonical_file": "data/processed/real/temperature/temperature_godas_monthly_standard.nc",
+      "file_size_bytes": 111788569,
+      "sha256": "cd6e7aa66d2f963d79d23ce8c13bd693f789fd2d3d212f7a49228f9fe2c3981b",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Model-assimilated reanalysis product. 16 discrete standard depths interpolated from 40 model levels. Coarse 1-degree zonal resolution. Historical coverage prior to 2022 is pending acquisition.",
+      "missing_coverage": "2000-01 to 2021-12 (264 months / 22 years)",
+      "resume_point": "2000-01",
+      "resume_instructions": "Run `python -u backend/scripts/fetch_historical_godas_3d.py --start-year 2000 --end-year 2021 --vars temperature`."
+    },
+    "salinity_3d": {
+      "dataset_id": "salinity_godas_3d",
+      "status": "VERIFIED PARTIAL",
+      "provider": "NOAA National Centers for Environmental Prediction (NCEP) / Physical Sciences Laboratory (PSL)",
+      "product": "Global Ocean Data Assimilation System (GODAS) Monthly 3D Practical Salinity (salt)",
+      "source_endpoint": "https://psl.noaa.gov/thredds/dodsC/Datasets/godas/salt.{YYYY}.nc",
+      "access_method": "Month-by-month OPeNDAP slice via xarray to prevent socket timeouts",
+      "acquisition_script": "backend/scripts/fetch_historical_godas_3d.py",
+      "processing_script": "backend/scripts/fetch_historical_godas_3d.py",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -44.83,
+          31.83
+        ],
+        "lon": [
+          20.5,
+          124.5
+        ]
+      },
+      "temporal_target": "2000-01 to 2024-12 (300 months, 25 years)",
+      "actual_temporal_coverage": "2022-01-01 to 2024-12-01 (36 continuous months, Years 2022, 2023, 2024)",
+      "spatial_resolution": "1/3 degree latitude x 1 degree longitude (231 lat x 105 lon)",
+      "temporal_resolution": "Monthly",
+      "depth_levels": [
+        5,
+        10,
+        25,
+        50,
+        75,
+        100,
+        150,
+        200,
+        300,
+        500,
+        750,
+        1000,
+        1500,
+        2000,
+        3000,
+        4000
+      ],
+      "variables": [
+        "so"
+      ],
+      "units": "PSU",
+      "transformations": [
+        "Slices along time, lat, lon month-by-month to avoid PSL THREDDS socket truncation",
+        "Interpolates from raw 40 GODAS vertical levels to OceanScope 16 standard depths",
+        "Renames variable 'salt' to CF-compliant 'so'",
+        "Concatenates validated annual NetCDFs into master dataset"
+      ],
+      "file_paths": [
+        "data/processed/real/salinity/salinity_godas_monthly_standard.nc",
+        "data/processed/real/salinity/yearly/salt_godas_2022_standard.nc",
+        "data/processed/real/salinity/yearly/salt_godas_2023_standard.nc",
+        "data/processed/real/salinity/yearly/salt_godas_2024_standard.nc"
+      ],
+      "canonical_file": "data/processed/real/salinity/salinity_godas_monthly_standard.nc",
+      "file_size_bytes": 111788670,
+      "sha256": "d5ccbe17b4bb80a5b037b5d8fe5b5e2c3e8afd4ee00ad8cc08f763365518432f",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Model-assimilated reanalysis product. 16 discrete standard depths interpolated from 40 model levels. Coarse 1-degree zonal resolution. Historical coverage prior to 2022 is pending acquisition.",
+      "missing_coverage": "2000-01 to 2021-12 (264 months / 22 years)",
+      "resume_point": "2000-01",
+      "resume_instructions": "Run `python -u backend/scripts/fetch_historical_godas_3d.py --start-year 2000 --end-year 2021 --vars salinity`."
+    },
+    "currents_3d": {
+      "dataset_id": "currents_godas_3d",
+      "status": "VERIFIED PARTIAL",
+      "provider": "NOAA National Centers for Environmental Prediction (NCEP) / Physical Sciences Laboratory (PSL)",
+      "product": "Global Ocean Data Assimilation System (GODAS) Monthly 3D Zonal & Meridional Currents (ucur, vcur)",
+      "source_endpoint": "https://psl.noaa.gov/thredds/dodsC/Datasets/godas/ucur.{YYYY}.nc and vcur.{YYYY}.nc",
+      "access_method": "Month-by-month OPeNDAP slice via xarray to prevent socket timeouts",
+      "acquisition_script": "backend/scripts/fetch_historical_godas_3d.py",
+      "processing_script": "backend/scripts/fetch_historical_godas_3d.py",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -44.67,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "temporal_target": "2000-01 to 2024-12 (300 months, 25 years)",
+      "actual_temporal_coverage": "2022-01-01 to 2024-12-01 (36 continuous months, Years 2022, 2023, 2024)",
+      "spatial_resolution": "1/3 degree latitude x 1 degree longitude (231 lat x 106 lon)",
+      "temporal_resolution": "Monthly",
+      "depth_levels": [
+        5,
+        10,
+        25,
+        50,
+        75,
+        100,
+        150,
+        200,
+        300,
+        500,
+        750,
+        1000,
+        1500,
+        2000,
+        3000,
+        4000
+      ],
+      "variables": [
+        "uo",
+        "vo"
+      ],
+      "units": "m/s",
+      "transformations": [
+        "Slices along time, lat, lon month-by-month to avoid PSL THREDDS socket truncation",
+        "Interpolates from raw 40 GODAS vertical levels to OceanScope 16 standard depths",
+        "Renames variables 'ucur' to 'uo' and 'vcur' to 'vo'",
+        "Combines uo and vo into a unified currents NetCDF dataset"
+      ],
+      "file_paths": [
+        "data/processed/real/currents/currents_godas_monthly_standard.nc",
+        "data/processed/real/currents/yearly/ucur_godas_2022_standard.nc",
+        "data/processed/real/currents/yearly/vcur_godas_2022_standard.nc",
+        "data/processed/real/currents/yearly/ucur_godas_2023_standard.nc",
+        "data/processed/real/currents/yearly/vcur_godas_2023_standard.nc",
+        "data/processed/real/currents/yearly/ucur_godas_2024_standard.nc",
+        "data/processed/real/currents/yearly/vcur_godas_2024_standard.nc"
+      ],
+      "canonical_file": "data/processed/real/currents/currents_godas_monthly_standard.nc",
+      "file_size_bytes": 225689074,
+      "sha256": "8a0a1a55d721eb1289e673a8d6700e68ecddf2c65f515f81a844dfb1799b2e1e",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Model-assimilated reanalysis velocity field. Staggered B-grid velocities interpolated to cell centers. Historical coverage prior to 2022 is pending acquisition.",
+      "missing_coverage": "2000-01 to 2021-12 (264 months / 22 years)",
+      "resume_point": "2000-01",
+      "resume_instructions": "Run `python -u backend/scripts/fetch_historical_godas_3d.py --start-year 2000 --end-year 2021 --vars currents_u currents_v`."
+    },
+    "density_3d": {
+      "dataset_id": "density_eos80_derived",
+      "status": "VERIFIED PARTIAL (DERIVED)",
+      "provider": "UNESCO 1983 International Equation of State of Seawater (EOS-80)",
+      "product": "Seawater In-Situ Density Computed Directly from Real Verified GODAS T & S",
+      "source_endpoint": "DERIVED LOCALLY from temperature_godas_monthly_standard.nc and salinity_godas_monthly_standard.nc",
+      "access_method": "Local scientific computation via backend/scripts/acquire_real_data.py::compute_eos80_density",
+      "acquisition_script": "backend/scripts/fetch_historical_godas_3d.py::derive_density_eos80",
+      "processing_script": "backend/scripts/fetch_historical_godas_3d.py::derive_density_eos80",
+      "requested_domain": {
+        "lat": [
+          -45.0,
+          32.0
+        ],
+        "lon": [
+          20.0,
+          125.0
+        ]
+      },
+      "actual_domain": {
+        "lat": [
+          -44.83,
+          31.83
+        ],
+        "lon": [
+          20.5,
+          124.5
+        ]
+      },
+      "temporal_target": "2000-01 to 2024-12 (300 months, 25 years)",
+      "actual_temporal_coverage": "2022-01-01 to 2024-12-01 (36 continuous months, Years 2022, 2023, 2024)",
+      "spatial_resolution": "1/3 degree latitude x 1 degree longitude (231 lat x 105 lon)",
+      "temporal_resolution": "Monthly",
+      "depth_levels": [
+        5,
+        10,
+        25,
+        50,
+        75,
+        100,
+        150,
+        200,
+        300,
+        500,
+        750,
+        1000,
+        1500,
+        2000,
+        3000,
+        4000
+      ],
+      "variables": [
+        "rho"
+      ],
+      "units": "kg/m^3",
+      "transformations": [
+        "COMPUTED DERIVED FIELD (Not an independent observation)",
+        "Evaluates UNESCO 1983 EOS-80 high-pressure polynomial equation of state rho(S, T, p)",
+        "Calculates hydrostatic pressure from standard depths (p = 0.1 * depth_m)",
+        "Evaluated grid cell by grid cell for all 16 depth levels across 36 monthly timesteps"
+      ],
+      "file_paths": [
+        "data/processed/real/density/density_eos80_monthly_standard.nc"
+      ],
+      "canonical_file": "data/processed/real/density/density_eos80_monthly_standard.nc",
+      "file_size_bytes": 55903029,
+      "sha256": "6097140330ca86ea5a20f304b360b3d39e2292fd15826119362a668399b1c768",
+      "verification_timestamp": "2026-09-08T07:35:00Z",
+      "known_limitations": "Derived parameter calculated from GODAS reanalysis temperature and salinity. Inherits model errors and 1-degree zonal resolution.",
+      "missing_coverage": "2000-01 to 2021-12 (264 months / 22 years)",
+      "resume_point": "Derived automatically upon completing missing T and S years",
+      "resume_instructions": "Automatically executed by `fetch_historical_godas_3d.py` or manually run `python -c \"from backend.scripts.fetch_historical_godas_3d import derive_density_eos80; derive_density_eos80(2000, 2024)\"`."
+    }
+  }
+}
