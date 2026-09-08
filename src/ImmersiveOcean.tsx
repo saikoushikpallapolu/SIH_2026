@@ -4,6 +4,8 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
   computeMarineBiomass,
+  extractClientIsolineSegments,
+  fetchTerrainSlice,
   getChlorophyllAt,
   getRegionalDiveProfile,
   getSubgridLocalEstimate,
@@ -11,7 +13,7 @@ import {
   type MarineBiomassInfo,
   type RegionalDiveProfile,
 } from './oceanDataEngine'
-import type { OceanVariable, Selection } from './types'
+import type { OceanVariable, Selection, SpatialBoundary, TerrainSliceData } from './types'
 
 export interface DiveTelemetry {
   depth: number
@@ -25,184 +27,235 @@ export interface DiveTelemetry {
   biomass: MarineBiomassInfo
   regionalProfile: RegionalDiveProfile
 }
-interface Props { variable: OceanVariable; selection: Selection; timeIndex: number; onTelemetry: (telemetry: DiveTelemetry) => void }
+interface Props {
+  variable: OceanVariable
+  selection: Selection
+  boundary?: SpatialBoundary
+  timeIndex: number
+  onTelemetry: (telemetry: DiveTelemetry) => void
+  onExit?: () => void
+}
 
 const worldLimit = 120
 
-
-const BATHYMETRY_BOUNDS = {
-  lat_min: -44.99166666666667,
-  lat_max: 32.008333333333326,
-  lon_min: 20.008333333333326,
-  lon_max: 125.00833333333333,
-}
-// Local patch size (degrees) sampled around the dive location. This is a
-// gameplay-scale choice, not literal geographic scale: the real ETOPO
-// relief SHAPE is sampled faithfully, but compressed into the dive's
-// existing playable vertical range (see normalization below) since literal
-// real-world depths (trenches to -7000m+) would sit far below where the
-// diver can actually reach (camera clamps to -17..7.5).
-const PATCH_DEGREES = 1.6
-
-function Terrain({ selection }: { selection: Selection }) {
-  const [bathymetry, setBathymetry] = useState<{
-    data: Uint8ClampedArray
-    width: number
-    height: number
-  } | null>(null)
+/**
+ * Authentic NOAA ETOPO 2022 Bedrock Topography & Bathymetry Terrain.
+ * Seamlessly populates the ocean dive floor with real continental shelf,
+ * abyssal bathymetry, and genuine subaerial coastal/Ghats land relief with vector contours.
+ */
+function Terrain({ selection, boundary }: { selection: Selection; boundary?: SpatialBoundary }) {
+  const [terrainData, setTerrainData] = useState<TerrainSliceData | null>(null)
 
   useEffect(() => {
-    const image = new Image()
+    let active = true
+    const bbox: [number, number, number, number] = boundary
+      ? boundary.bbox
+      : [
+          Math.max(-44.9, selection.latitude - 1.2),
+          Math.min(31.9, selection.latitude + 1.2),
+          Math.max(20.1, selection.longitude - 1.2),
+          Math.min(124.9, selection.longitude + 1.2),
+        ]
 
-    image.onload = () => {
-      const canvas = document.createElement('canvas')
-      canvas.width = image.width
-      canvas.height = image.height
+    fetchTerrainSlice(bbox, 96)
+      .then((data) => {
+        if (active) setTerrainData(data)
+      })
+      .catch((err) => {
+        console.warn('Terrain NOAA ETOPO fetch fallback:', err)
+      })
 
-      const ctx = canvas.getContext('2d')
-
-      if (!ctx) {
-        console.warn('Bathymetry: could not create canvas context')
-        return
-      }
-
-      try {
-        ctx.drawImage(image, 0, 0)
-
-        const imageData = ctx.getImageData(
-          0,
-          0,
-          image.width,
-          image.height,
-        )
-
-        setBathymetry({
-          data: imageData.data,
-          width: image.width,
-          height: image.height,
-        })
-      } catch (error) {
-        console.error('Bathymetry pixel read failed:', error)
-      }
+    return () => {
+      active = false
     }
+  }, [boundary, selection.latitude, selection.longitude])
 
-    image.onerror = () => {
-      console.warn('Bathymetry image fallback for dive mode')
-    }
-
-    image.src = '/data/bathymetry_relief.png'
-  }, [])
-
-  const geometry = useMemo(() => {
+  const { terrainGeometry, skirtGeometry, coastlineGeom, contourGeom } = useMemo(() => {
     const size = 260
-    const segments = 64
+    const res = terrainData ? terrainData.grid_res : 64
+    const elevGrid = terrainData?.elevation_grid
 
-    const positions = new Float32Array(
-      (segments + 1) * (segments + 1) * 3,
-    )
-
+    const numVerts = res * res
+    const positions = new Float32Array(numVerts * 3)
+    const colors = new Float32Array(numVerts * 3)
     const indices: number[] = []
 
-    const rawDepths = new Float32Array(
-      (segments + 1) * (segments + 1),
-    )
+    const color = new THREE.Color()
 
-    let minDepth = Infinity
-    let maxDepth = -Infinity
+    for (let r = 0; r < res; r++) {
+      // r = 0 is North (pz = -size/2), r = res - 1 is South (pz = +size/2)
+      const pz = (0.5 - r / (res - 1)) * size
+      for (let c = 0; c < res; c++) {
+        // c = 0 is West (px = -size/2), c = res - 1 is East (px = +size/2)
+        const px = (c / (res - 1) - 0.5) * size
+        const idx = r * res + c
+        const elev = elevGrid ? elevGrid[idx] : -1200
 
-    const sampleDepth = (lat: number, lon: number) => {
-      if (!bathymetry) return 0
-
-      const u =
-        (lon - BATHYMETRY_BOUNDS.lon_min) /
-        (BATHYMETRY_BOUNDS.lon_max - BATHYMETRY_BOUNDS.lon_min)
-
-      const v =
-        (BATHYMETRY_BOUNDS.lat_max - lat) /
-        (BATHYMETRY_BOUNDS.lat_max - BATHYMETRY_BOUNDS.lat_min)
-
-      const px = THREE.MathUtils.clamp(
-        Math.round(u * (bathymetry.width - 1)),
-        0,
-        bathymetry.width - 1,
-      )
-
-      const py = THREE.MathUtils.clamp(
-        Math.round(v * (bathymetry.height - 1)),
-        0,
-        bathymetry.height - 1,
-      )
-
-      const index =
-        (py * bathymetry.width + px) * 4
-
-      return (bathymetry.data[index] / 255) * 7500
-    }
-
-    for (let z = 0; z <= segments; z += 1) {
-      for (let x = 0; x <= segments; x += 1) {
-        const i = z * (segments + 1) + x
-        const fx = x / segments - 0.5
-        const fz = z / segments - 0.5
-
-        const lat = selection.latitude - fz * PATCH_DEGREES
-        const lon = selection.longitude + fx * PATCH_DEGREES
-        const depth = sampleDepth(lat, lon)
-
-        rawDepths[i] = depth
-
-        if (bathymetry) {
-          minDepth = Math.min(minDepth, depth)
-          maxDepth = Math.max(maxDepth, depth)
+        let py = -18.0
+        if (elev >= 0) {
+          // Authentic Land Elevation Relief (Western Ghats peaks, coastal hills)
+          const landRatio = Math.min(1.0, elev / 1800.0)
+          py = -18.0 + landRatio * 24.0 // rises up towards water surface/peaks
+          
+          // Hypsometric Land Shading
+          if (elev < 80) {
+            color.setRGB(0.20, 0.58, 0.28) // Coastal lowlands
+          } else if (elev < 400) {
+            color.setRGB(0.48, 0.54, 0.26) // Foothills & plains
+          } else if (elev < 1200) {
+            color.setRGB(0.64, 0.50, 0.26) // Western Ghats / ridges
+          } else {
+            color.setRGB(0.75, 0.65, 0.52) // Mountain peaks
+          }
+        } else {
+          // Authentic Ocean Bathymetry Relief
+          const depth = -elev
+          const depthRatio = Math.min(1.0, depth / 4500.0)
+          py = -18.0 - depthRatio * 14.0 // drops down to seabed
+          
+          // Bathymetric cmocean Shading
+          if (depth < 200) {
+            color.setRGB(0.06, 0.65, 0.72) // Continental shelf
+          } else if (depth < 1500) {
+            color.setRGB(0.05, 0.40, 0.62) // Continental slope
+          } else {
+            color.setRGB(0.02, 0.18, 0.38) // Abyssal plain
+          }
         }
+
+        positions[idx * 3] = px
+        positions[idx * 3 + 1] = py
+        positions[idx * 3 + 2] = pz
+
+        colors[idx * 3] = color.r
+        colors[idx * 3 + 1] = color.g
+        colors[idx * 3 + 2] = color.b
       }
     }
 
-    if (!bathymetry) {
-      minDepth = 0
-      maxDepth = 1
-    }
-
-    const range = Math.max(1, maxDepth - minDepth)
-
-    for (let z = 0; z <= segments; z += 1) {
-      for (let x = 0; x <= segments; x += 1) {
-        const i = z * (segments + 1) + x
-        const px = (x / segments - 0.5) * size
-        const pz = (z / segments - 0.5) * size
-
-        const normalized = bathymetry ? (rawDepths[i] - minDepth) / range : 0
-        const y = -18 - normalized * 14
-
-        positions[i * 3] = px
-        positions[i * 3 + 1] = y
-        positions[i * 3 + 2] = pz
-      }
-    }
-
-    for (let z = 0; z < segments; z += 1) {
-      for (let x = 0; x < segments; x += 1) {
-        const a = z * (segments + 1) + x
+    // Upward-facing winding: (a, b, d) and (b, e, d)
+    for (let r = 0; r < res - 1; r++) {
+      for (let c = 0; c < res - 1; c++) {
+        const a = r * res + c
         const b = a + 1
-        const c = a + segments + 1
-        const d = c + 1
-
-        indices.push(a, c, b)
-        indices.push(b, c, d)
+        const d = (r + 1) * res + c
+        const e = d + 1
+        indices.push(a, b, d)
+        indices.push(b, e, d)
       }
     }
 
-    const result = new THREE.BufferGeometry()
-    result.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    result.setIndex(indices)
-    result.computeVertexNormals()
-    return result
-  }, [bathymetry, selection.latitude, selection.longitude])
+    const tGeom = new THREE.BufferGeometry()
+    tGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    tGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    tGeom.setIndex(indices)
+    tGeom.computeVertexNormals()
+
+    // Framing Skirt Side Walls
+    const baseFloorY = -38.0
+    const skirtPos: number[] = []
+    const skirtColors: number[] = []
+
+    const addWallSegment = (p1: [number, number, number], p2: [number, number, number], isOcean: boolean) => {
+      skirtPos.push(...p1, p1[0], baseFloorY, p1[2], ...p2)
+      skirtPos.push(...p2, p1[0], baseFloorY, p1[2], p2[0], baseFloorY, p2[2])
+      const wallColor = isOcean ? new THREE.Color('#081f33') : new THREE.Color('#1f2620')
+      for (let i = 0; i < 6; i++) skirtColors.push(wallColor.r, wallColor.g, wallColor.b)
+    }
+
+    // 4 edges
+    for (let c = 0; c < res - 1; c++) {
+      const idx1 = c, idx2 = c + 1
+      addWallSegment([positions[idx1 * 3], positions[idx1 * 3 + 1], positions[idx1 * 3 + 2]], [positions[idx2 * 3], positions[idx2 * 3 + 1], positions[idx2 * 3 + 2]], (elevGrid?.[idx1] ?? -1) < 0)
+    }
+    for (let c = 0; c < res - 1; c++) {
+      const idx1 = (res - 1) * res + c, idx2 = (res - 1) * res + c + 1
+      addWallSegment([positions[idx2 * 3], positions[idx2 * 3 + 1], positions[idx2 * 3 + 2]], [positions[idx1 * 3], positions[idx1 * 3 + 1], positions[idx1 * 3 + 2]], (elevGrid?.[idx1] ?? -1) < 0)
+    }
+    for (let r = 0; r < res - 1; r++) {
+      const idx1 = r * res, idx2 = (r + 1) * res
+      addWallSegment([positions[idx2 * 3], positions[idx2 * 3 + 1], positions[idx2 * 3 + 2]], [positions[idx1 * 3], positions[idx1 * 3 + 1], positions[idx1 * 3 + 2]], (elevGrid?.[idx1] ?? -1) < 0)
+    }
+    for (let r = 0; r < res - 1; r++) {
+      const idx1 = r * res + (res - 1), idx2 = (r + 1) * res + (res - 1)
+      addWallSegment([positions[idx1 * 3], positions[idx1 * 3 + 1], positions[idx1 * 3 + 2]], [positions[idx2 * 3], positions[idx2 * 3 + 1], positions[idx2 * 3 + 2]], (elevGrid?.[idx1] ?? -1) < 0)
+    }
+
+    const sGeom = new THREE.BufferGeometry()
+    sGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(skirtPos), 3))
+    sGeom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(skirtColors), 3))
+    sGeom.computeVertexNormals()
+
+    // Marching Squares Vector Coastline & Topographic Contours
+    let cGeom: THREE.BufferGeometry | null = null
+    let contGeom: THREE.BufferGeometry | null = null
+
+    if (terrainData) {
+      const { min_lat: minLat, max_lat: maxLat, min_lon: minLon, max_lon: maxLon } = terrainData.bounds
+      const grid = terrainData.elevation_grid
+
+      const buildSegments = (segs: [number, number][][], isoElev: number) => {
+        const pts: number[] = []
+        for (const [p1, p2] of segs) {
+          const u1 = (p1[1] - minLon) / (maxLon - minLon)
+          const v1 = (p1[0] - minLat) / (maxLat - minLat)
+          const x1 = (u1 - 0.5) * size
+          const z1 = (0.5 - v1) * size
+          const y1 = isoElev >= 0 ? -18.0 + Math.min(1.0, isoElev / 1800.0) * 24.0 + 0.12 : -18.0 - Math.min(1.0, -isoElev / 4500.0) * 14.0 + 0.12
+
+          const u2 = (p2[1] - minLon) / (maxLon - minLon)
+          const v2 = (p2[0] - minLat) / (maxLat - minLat)
+          const x2 = (u2 - 0.5) * size
+          const z2 = (0.5 - v2) * size
+          const y2 = isoElev >= 0 ? -18.0 + Math.min(1.0, isoElev / 1800.0) * 24.0 + 0.12 : -18.0 - Math.min(1.0, -isoElev / 4500.0) * 14.0 + 0.12
+
+          pts.push(x1, y1, z1, x2, y2, z2)
+        }
+        const g = new THREE.BufferGeometry()
+        g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3))
+        return g
+      }
+
+      // Coastline (Z = 0)
+      const coastSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, 0)
+      if (coastSegs.length > 0) cGeom = buildSegments(coastSegs, 0)
+
+      // Topo & Bathy Contours (e.g. 150m and -200m shelf break)
+      const shelfSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, -200)
+      const topoSegs = extractClientIsolineSegments(grid, res, minLat, maxLat, minLon, maxLon, 250)
+      const combined = [...shelfSegs, ...topoSegs]
+      if (combined.length > 0) contGeom = buildSegments(combined, 100)
+    }
+
+    return { terrainGeometry: tGeom, skirtGeometry: sGeom, coastlineGeom: cGeom, contourGeom: contGeom }
+  }, [terrainData])
 
   return (
-    <mesh geometry={geometry} position={[0, 0, 0]}>
-      <meshStandardMaterial color="#2d3735" roughness={0.96} metalness={0} />
-    </mesh>
+    <group position={[0, 0, 0]}>
+      {/* Authentic NOAA ETOPO 2022 Seabed & Land Relief Mesh */}
+      <mesh geometry={terrainGeometry}>
+        <meshStandardMaterial vertexColors roughness={0.88} metalness={0.08} />
+      </mesh>
+
+      {/* Side Pedestal Walls */}
+      <mesh geometry={skirtGeometry}>
+        <meshStandardMaterial vertexColors roughness={0.95} metalness={0} />
+      </mesh>
+
+      {/* Vector Coastline Shoreline (Z = 0 contour) */}
+      {coastlineGeom && (
+        <lineSegments geometry={coastlineGeom}>
+          <lineBasicMaterial color="#ffe600" linewidth={2.5} />
+        </lineSegments>
+      )}
+
+      {/* Topographic & Bathymetric Contours */}
+      {contourGeom && (
+        <lineSegments geometry={contourGeom}>
+          <lineBasicMaterial color="#00f2fe" transparent opacity={0.65} linewidth={1} />
+        </lineSegments>
+      )}
+    </group>
   )
 }
 
@@ -943,8 +996,10 @@ function ThermalField({
 function DiveWorld({
   variable,
   selection,
+  boundary,
   timeIndex,
   onTelemetry,
+  onExit,
 }: Props) {
   // Mutable diver position reference for ZERO-overhead 60 FPS fish interaction
   const diverPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 3, 55))
@@ -997,7 +1052,7 @@ function DiveWorld({
 
       <OceanSurface />
 
-      <Terrain selection={selection} />
+      <Terrain selection={selection} boundary={boundary} />
 
       <RegionalSeabedFeatures profile={profile} selection={selection} />
 

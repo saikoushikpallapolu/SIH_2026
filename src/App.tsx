@@ -27,8 +27,7 @@ import {
   Zap,
 } from 'lucide-react'
 import GlobeScene from './GlobeScene'
-import DeepDiveBlock from './DeepDiveBlock'
-import type { DiveTelemetry } from './ImmersiveOcean'
+import ImmersiveOcean, { type DiveTelemetry } from './ImmersiveOcean'
 import catalogData from '../data/processed/observations/instruments_catalog.json'
 import type { Instrument as CatalogInstrument } from './types'
 const instruments = catalogData as CatalogInstrument[]
@@ -375,9 +374,14 @@ export default function App() {
       {/* 3D Visual Canvas */}
       <div className="globe-wrap">
         {mode === 'dive' ? (
-          <DeepDiveBlock
+          <ImmersiveOcean
+            variable={variable}
+            selection={isInsideIndianOcean ? selection : { latitude: 12.5, longitude: 68.3 }}
             boundary={diveBoundary}
-            monthIndex={monthIndex}
+            timeIndex={Math.floor(monthIndex / 50)}
+            onTelemetry={(tel) => {
+              setDiveTelemetry(tel)
+            }}
             onExit={() => setMode('explore')}
           />
         ) : (
@@ -1028,6 +1032,88 @@ export default function App() {
       )}
 
 
+
+      {/* Dive HUD (Enhanced with Marine Biomass, Chlorophyll & Plankton Productivity) */}
+      {!zenMode && mode === 'dive' && (
+        <>
+          <section className="dive-hud-clean glass">
+            <div className="dive-title">
+              <Compass size={13} />
+              <span>
+                {Math.abs(selection.latitude).toFixed(2)}°{selection.latitude >= 0 ? 'N' : 'S'} ·{' '}
+                {Math.abs(selection.longitude).toFixed(2)}°{selection.longitude >= 0 ? 'E' : 'W'}
+              </span>
+            </div>
+            <div className="dive-depth-big">
+              {diveTelemetry.depth}
+              <small>m</small>
+            </div>
+            <div className="dive-hud-metrics-row">
+              <div className="dive-chip">
+                <span>TEMP</span>
+                <b>{diveTelemetry.temperature.toFixed(1)}°C</b>
+              </div>
+              {diveTelemetry.salinity !== undefined && (
+                <div className="dive-chip">
+                  <span>SALINITY</span>
+                  <b>{diveTelemetry.salinity.toFixed(1)} PSU</b>
+                </div>
+              )}
+              {diveTelemetry.chlorophyll !== undefined && (
+                <div className="dive-chip chl">
+                  <span>CHL-A</span>
+                  <b>{diveTelemetry.chlorophyll.toFixed(2)} mg/m³</b>
+                </div>
+              )}
+            </div>
+
+            {diveTelemetry.biomass && (
+              <div className="dive-biomass-panel">
+                <div className="biomass-badge-row">
+                  <span className="pulse emerald" />
+                  <span className="biomass-state-text">{diveTelemetry.biomass.school_activity.toUpperCase()}</span>
+                  <span className="biomass-fish-count">· ~{diveTelemetry.biomass.estimated_fish_count} Fish</span>
+                </div>
+                <div className="biomass-subtext">
+                  Primary Prod: <b>{diveTelemetry.biomass.primary_productivity_mg_c} mg C/m²/d</b>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <div className="dive-controls-hint glass">
+            <Compass size={13} />
+            <span>
+              Use <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to swim · <kbd>↑</kbd> <kbd>↓</kbd> for depth · Click & drag water to look
+            </span>
+          </div>
+
+          <button
+            className="back-to-globe-btn glass"
+            onClick={() => setMode('explore')}
+            title="Return to 3D Globe"
+            style={{
+              position: 'absolute',
+              top: '80px',
+              left: '24px',
+              zIndex: 30,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 16px',
+              borderRadius: '10px',
+              color: '#00f2fe',
+              background: 'rgba(4, 18, 32, 0.85)',
+              border: '1px solid rgba(0, 242, 254, 0.4)',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: '12px',
+            }}
+          >
+            ← Back to Globe
+          </button>
+        </>
+      )}
 
       {/* Standard Floating Bottom Dock for Explore & Currents Mode */}
       {!zenMode && mode !== 'tsunami' && mode !== 'dive' && (
