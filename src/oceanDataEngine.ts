@@ -61,6 +61,263 @@ export function isDryLand(lat: number, lon: number): boolean {
 
 export const DEPTH_STOPS = [0, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000]
 
+export interface OceanHotspot {
+  id: string
+  name: string
+  subtitle: string
+  latitude: number
+  longitude: number
+  category: 'bloom_upwelling' | 'trench_abyss' | 'delta_estuary' | 'coral_atoll' | 'volcanic_ridge'
+  categoryLabel: string
+  badgeColor: string
+  defaultDepth: number
+  description: string
+}
+
+export const OCEAN_HOTSPOTS: OceanHotspot[] = [
+  {
+    id: 'somali_upwelling',
+    name: 'Somali Upwelling Bloom',
+    subtitle: 'Primary Indian Ocean Fishery Feeding Ground',
+    latitude: 9.5,
+    longitude: 51.5,
+    category: 'bloom_upwelling',
+    categoryLabel: 'High Bloom · Feeding Frenzy',
+    badgeColor: '#10b981',
+    defaultDepth: 25,
+    description: 'Intense Southwest Monsoon upwelling brings cold, nutrient-rich bottom water creating massive phytoplankton blooms (>2.5 mg/m³).',
+  },
+  {
+    id: 'malabar_shelf',
+    name: 'Malabar Coastal Shelf',
+    subtitle: 'Southwest Indian Pelagic Upwelling',
+    latitude: 12.5,
+    longitude: 74.5,
+    category: 'bloom_upwelling',
+    categoryLabel: 'Coastal Upwelling · Baitballs',
+    badgeColor: '#34d399',
+    defaultDepth: 20,
+    description: 'Prolific sardine and mackerel feeding shelf fueled by coastal upwelling currents along the Konkan-Malabar coast.',
+  },
+  {
+    id: 'ganges_delta',
+    name: 'Ganges-Brahmaputra Delta',
+    subtitle: 'Northern Bay of Bengal Nutrient Outflow',
+    latitude: 19.5,
+    longitude: 88.5,
+    category: 'delta_estuary',
+    categoryLabel: 'Estuary Plume · High Nutrients',
+    badgeColor: '#14b8a6',
+    defaultDepth: 15,
+    description: 'Enormous terrestrial river discharge carrying silts and riverine nitrates into the northern Bay of Bengal.',
+  },
+  {
+    id: 'java_trench',
+    name: 'Java / Sunda Trench Abyss',
+    subtitle: 'Deepest Subduction Zone (-7,120 m)',
+    latitude: -9.2,
+    longitude: 109.5,
+    category: 'trench_abyss',
+    categoryLabel: 'Abyssal Trench · Extreme Depth',
+    badgeColor: '#3b82f6',
+    defaultDepth: 1800,
+    description: 'Tectonic subduction zone featuring sheer vertical rocky canyon walls and abyssal benthic fauna.',
+  },
+  {
+    id: 'chagos_atoll',
+    name: 'Maldives-Chagos Coral Ridge',
+    subtitle: 'Tropical Coral Atolls & Seamounts',
+    latitude: -4.5,
+    longitude: 72.5,
+    category: 'coral_atoll',
+    categoryLabel: 'Coral Plateau · Reef Shoals',
+    badgeColor: '#06b6d4',
+    defaultDepth: 30,
+    description: 'Pristine coral atoll archipelago and submarine ridge with crystal clear euphotic waters.',
+  },
+  {
+    id: 'mid_indian_ridge',
+    name: 'Southwest Indian Ridge',
+    subtitle: 'Mid-Ocean Volcanic Spreading Center',
+    latitude: -25.5,
+    longitude: 69.5,
+    category: 'volcanic_ridge',
+    categoryLabel: 'Volcanic Spine · Tectonic Rift',
+    badgeColor: '#f59e0b',
+    defaultDepth: 1200,
+    description: 'Slow-spreading divergent tectonic boundary with underwater basaltic volcanic ridges and hydrothermal activity.',
+  },
+  {
+    id: 'agulhas_bank',
+    name: 'Agulhas Bank Upwelling',
+    subtitle: 'Southwestern Boundary Current Vortex',
+    latitude: -32.5,
+    longitude: 32.5,
+    category: 'bloom_upwelling',
+    categoryLabel: 'Current Jet · Upwelling',
+    badgeColor: '#10b981',
+    defaultDepth: 45,
+    description: 'Vigorous western boundary jet transporting warm subtropical water into the Atlantic with dynamic shear upwelling.',
+  },
+  {
+    id: 'humboldt_upwelling',
+    name: 'Peru / Humboldt Marine Upwelling',
+    subtitle: "World's Highest-Yield Fishery Ecosystem",
+    latitude: -14.5,
+    longitude: -76.5,
+    category: 'bloom_upwelling',
+    categoryLabel: 'Mega-Bloom · Feeding Frenzy',
+    badgeColor: '#10b981',
+    defaultDepth: 25,
+    description: "The world's most productive eastern boundary marine upwelling system, driven by equatorial wind stress along Peru and Chile.",
+  },
+  {
+    id: 'benguela_upwelling',
+    name: 'Benguela Upwelling Ecosystem',
+    subtitle: 'South Atlantic Nutrient Injection System',
+    latitude: -23.5,
+    longitude: 14.2,
+    category: 'bloom_upwelling',
+    categoryLabel: 'Coastal Upwelling · Baitballs',
+    badgeColor: '#34d399',
+    defaultDepth: 30,
+    description: 'Intense coastal upwelling driven by South Atlantic trade winds, supporting immense shoals of sardines and anchovies.',
+  },
+  {
+    id: 'california_current',
+    name: 'California Current Upwelling',
+    subtitle: 'North Pacific Boundary Upwelling',
+    latitude: 36.5,
+    longitude: -122.5,
+    category: 'bloom_upwelling',
+    categoryLabel: 'KelpHaven · Coastal Shoals',
+    badgeColor: '#14b8a6',
+    defaultDepth: 25,
+    description: 'Equatorward wind-driven upwelling nourishing giant kelp forests and extensive pelagic predator migrations.',
+  },
+  {
+    id: 'mariana_trench',
+    name: 'Mariana Trench Challenger Deep',
+    subtitle: "Earth's Deepest Point (-10,920 m)",
+    latitude: 11.3,
+    longitude: 142.2,
+    category: 'trench_abyss',
+    categoryLabel: 'Hadal Abyss · Extreme Pressure',
+    badgeColor: '#6366f1',
+    defaultDepth: 4500,
+    description: 'The deepest oceanic hadal trench on Earth, plunging nearly 11 kilometers beneath the Pacific surface.',
+  },
+  {
+    id: 'amazon_plume',
+    name: 'Amazon River Oceanic Plume',
+    subtitle: 'Tropical Atlantic Nutrient Discharge',
+    latitude: 2.5,
+    longitude: -49.5,
+    category: 'delta_estuary',
+    categoryLabel: 'River Plume · Phytoplankton Bloom',
+    badgeColor: '#10b981',
+    defaultDepth: 20,
+    description: 'Massive discharge of freshwater, silica, and nitrates extending hundreds of kilometers into the tropical Atlantic.',
+  },
+  {
+    id: 'galapagos_upwelling',
+    name: 'Galápagos Equatorial Upwelling',
+    subtitle: 'Equatorial Pacific Marine Biodiversity Oasis',
+    latitude: -0.6,
+    longitude: -90.8,
+    category: 'bloom_upwelling',
+    categoryLabel: 'Equatorial Oasis · Pelagic Haven',
+    badgeColor: '#10b981',
+    defaultDepth: 30,
+    description: 'The Cromwell Undercurrent hits the Galápagos platform, forcing deep cold nutrient water to the surface in the equatorial Pacific.',
+  },
+  {
+    id: 'great_barrier_reef',
+    name: 'Great Barrier Reef & Coral Sea',
+    subtitle: "World's Largest Coral Reef Biome",
+    latitude: -18.2,
+    longitude: 147.5,
+    category: 'coral_atoll',
+    categoryLabel: 'Coral Superstructure · Mega-Fauna',
+    badgeColor: '#06b6d4',
+    defaultDepth: 25,
+    description: 'Massive calcified coral reef labyrinth supporting thousands of species of fish, rays, and pelagic migratory species.',
+  },
+  {
+    id: 'mississippi_delta',
+    name: 'Mississippi River Plume & Delta',
+    subtitle: 'Gulf of Mexico High-Nutrient Outflow',
+    latitude: 28.6,
+    longitude: -89.4,
+    category: 'delta_estuary',
+    categoryLabel: 'Estuary Plume · Coastal Fishery',
+    badgeColor: '#14b8a6',
+    defaultDepth: 18,
+    description: 'Rich agricultural nutrient runoff from the Mississippi basin fueling high primary productivity and shrimp/pelagic fisheries.',
+  },
+  {
+    id: 'canary_upwelling',
+    name: 'Canary / Mauritania Upwelling',
+    subtitle: 'Northwest African Pelagic Fishery',
+    latitude: 21.0,
+    longitude: -17.5,
+    category: 'bloom_upwelling',
+    categoryLabel: 'Coastal Upwelling · Sardine Shoals',
+    badgeColor: '#34d399',
+    defaultDepth: 28,
+    description: 'Trade-wind driven coastal upwelling along Mauritania and Western Sahara, creating massive sardine and mackerel shoals.',
+  },
+  {
+    id: 'sri_lanka_dome',
+    name: 'Sri Lanka Cetacean Dome',
+    subtitle: 'Southern Indian Ocean Whale Sanctuary',
+    latitude: 5.8,
+    longitude: 80.5,
+    category: 'bloom_upwelling',
+    categoryLabel: 'Thermal Dome · Whale Feeding Ground',
+    badgeColor: '#10b981',
+    defaultDepth: 35,
+    description: 'Cyclonic eddy upwelling creates a permanent biological dome off southern Sri Lanka, attracting resident pygmy blue whales and sperm whales.',
+  },
+  {
+    id: 'kuroshio_confluence',
+    name: 'Kuroshio-Oyashio Confluence',
+    subtitle: 'Northwest Pacific High-Energy Mixing Front',
+    latitude: 38.5,
+    longitude: 144.5,
+    category: 'bloom_upwelling',
+    categoryLabel: 'Frontal Convergence · Fish Aggregation',
+    badgeColor: '#3b82f6',
+    defaultDepth: 40,
+    description: 'Collision of the warm Kuroshio and cold subarctic Oyashio currents produces hyper-productive seasonal phytoplankton blooms.',
+  },
+]
+
+export interface MarineBiomassInfo {
+  chlorophyll_mg_m3: number
+  primary_productivity_mg_c: number
+  fish_density_index: number // 0 - 100
+  fish_density_label: string
+  school_activity: 'Calm' | 'Active Foraging' | 'Swarming Baitball' | 'Feeding Frenzy'
+  estimated_fish_count: number
+}
+
+export interface RegionalDiveProfile {
+  basin: string
+  hotspotName: string | null
+  seabedElevation: number
+  seabedDepth: number
+  terrainType: 'continental_shelf' | 'deep_trench' | 'mid_ocean_ridge' | 'coral_atoll' | 'abyssal_plain' | 'delta_estuary'
+  terrainRoughness: number
+  waterColor: string
+  fogColor: string
+  ambientColor: string
+  turbidity: number
+  chlorophyll: number
+  biomass: MarineBiomassInfo
+}
+
+
 export interface SubgridTelemetry {
   coordinate: { latitude: number; longitude: number }
   basin: string
@@ -73,6 +330,7 @@ export interface SubgridTelemetry {
   chlorophyll_mg_m3: number
   current_speed_m_s: number
   current_vector: { u: number; v: number }
+  marine_biomass?: MarineBiomassInfo
   ctd_profile: {
     temperatures: number[]
     salinities: number[]
@@ -687,6 +945,208 @@ export function getChlorophyllAt(lat: number, lon: number, timeIndex = 0): numbe
   return Math.round(chl * 100) / 100
 }
 
+
+export function computeMarineBiomass(chl: number, depth = 0, isLand = false): MarineBiomassInfo {
+  if (isLand) {
+    return {
+      chlorophyll_mg_m3: 0,
+      primary_productivity_mg_c: 0,
+      fish_density_index: 0,
+      fish_density_label: 'Continental Landmass',
+      school_activity: 'Calm',
+      estimated_fish_count: 0,
+    }
+  }
+
+  const photicFactor = Math.max(0.50, Math.exp(-depth / 450.0))
+  const effectiveChl = chl * photicFactor
+
+  const primary_productivity = Math.round(chl * 480 * 10) / 10
+  const densityIndex = Math.min(100, Math.round(effectiveChl * 58))
+
+  let label = 'Oligotrophic Pelagic Waters (Sparse Fish)'
+  let activity: MarineBiomassInfo['school_activity'] = 'Calm'
+  let fishCount = 120
+
+  // High contrast ratio: Hyper-dense baitball in bloom (>1.4 mg/m3) vs sparse solitary in desert (<0.2 mg/m3)
+  if (effectiveChl > 1.0) {
+    label = 'Hyper-Productive Fishery (Feeding Frenzy)'
+    activity = 'Feeding Frenzy'
+    fishCount = Math.min(1500, Math.round(1200 + effectiveChl * 220))
+  } else if (effectiveChl > 0.5) {
+    label = 'High Biomass Swarming Baitball'
+    activity = 'Swarming Baitball'
+    fishCount = Math.min(1150, Math.round(850 + effectiveChl * 280))
+  } else if (effectiveChl > 0.22) {
+    label = 'Moderate Foraging Shoals'
+    activity = 'Active Foraging'
+    fishCount = Math.min(750, Math.round(450 + effectiveChl * 350))
+  } else {
+    label = 'Oligotrophic Desert (Sparse Solitary Fish)'
+    activity = 'Calm'
+    fishCount = Math.max(160, Math.round(effectiveChl * 300 + 120))
+  }
+
+  if (depth > 600) {
+    fishCount = Math.max(120, Math.round(fishCount * 0.45))
+  }
+
+  return {
+    chlorophyll_mg_m3: Math.round(chl * 100) / 100,
+    primary_productivity_mg_c: primary_productivity,
+    fish_density_index: densityIndex,
+    fish_density_label: label,
+    school_activity: activity,
+    estimated_fish_count: fishCount,
+  }
+}
+
+export function getRegionalDiveProfile(lat: number, lon: number, timeIndex = 0): RegionalDiveProfile {
+  const basin = identifyBasin(lat, lon)
+  const isLand = isDryLand(lat, lon)
+  const chl = getChlorophyllAt(lat, lon, timeIndex)
+  const biomass = computeMarineBiomass(chl, 0, isLand)
+
+  let elevation = -3800
+  let terrainType: RegionalDiveProfile['terrainType'] = 'abyssal_plain'
+  let roughness = 1.0
+  let waterColor = '#05324c'
+  let fogColor = '#021525'
+  let ambientColor = '#2f98b8'
+  let turbidity = 0.35
+  let hotspotName: string | null = null
+
+  if (basin.includes('Java') || (lat >= -12 && lat <= -5 && lon >= 100 && lon <= 118)) {
+    elevation = -7120
+    terrainType = 'deep_trench'
+    roughness = 1.85
+    waterColor = '#021226'
+    fogColor = '#010812'
+    ambientColor = '#0f3d56'
+    turbidity = 0.22
+    hotspotName = 'Java / Sunda Subduction Trench Abyss (-7,120 m)'
+  } else if (basin.includes('Mariana') || (lat >= 10 && lat <= 20 && lon >= 140 && lon <= 150)) {
+    elevation = -10920
+    terrainType = 'deep_trench'
+    roughness = 2.1
+    waterColor = '#010915'
+    fogColor = '#00050c'
+    ambientColor = '#08253a'
+    turbidity = 0.18
+    hotspotName = 'Mariana Trench Challenger Deep (-10,920 m)'
+  } else if (basin.includes('Somali') || (lat >= 2 && lat <= 14 && lon >= 44 && lon <= 56)) {
+    elevation = -1200
+    terrainType = 'continental_shelf'
+    roughness = 1.2
+    waterColor = '#043b32'
+    fogColor = '#02211c'
+    ambientColor = '#10b981'
+    turbidity = 0.88
+    hotspotName = 'Somali Current Primary Feeding Ground'
+  } else if (basin.includes('Humboldt') || (lat >= -40 && lat <= -6 && lon >= -82 && lon <= -70)) {
+    elevation = -1400
+    terrainType = 'continental_shelf'
+    roughness = 1.45
+    waterColor = '#033830'
+    fogColor = '#011e19'
+    ambientColor = '#10b981'
+    turbidity = 0.92
+    hotspotName = 'Peru-Chile / Humboldt Upwelling Fishery'
+  } else if (basin.includes('Benguela') || (lat >= -34 && lat <= -15 && lon >= 10 && lon <= 18)) {
+    elevation = -800
+    terrainType = 'continental_shelf'
+    roughness = 1.3
+    waterColor = '#043b32'
+    fogColor = '#02221c'
+    ambientColor = '#34d399'
+    turbidity = 0.85
+    hotspotName = 'Benguela Marine Upwelling Shelf'
+  } else if (lat >= 8 && lat <= 16 && lon >= 72 && lon <= 76.5) {
+    elevation = -140
+    terrainType = 'continental_shelf'
+    roughness = 0.75
+    waterColor = '#064e48'
+    fogColor = '#032622'
+    ambientColor = '#059669'
+    turbidity = 0.72
+    hotspotName = 'Malabar Coastal Upwelling & Fishery Shelf'
+  } else if (basin.includes('Bay of Bengal') && lat > 16) {
+    elevation = -320
+    terrainType = 'delta_estuary'
+    roughness = 0.65
+    waterColor = '#0a3f45'
+    fogColor = '#042024'
+    ambientColor = '#14b8a6'
+    turbidity = 0.82
+    hotspotName = 'Ganges-Brahmaputra Deltaic Nutrients'
+  } else if (basin.includes('Amazon') || (lat >= -4 && lat <= 10 && lon >= -56 && lon <= -44)) {
+    elevation = -180
+    terrainType = 'delta_estuary'
+    roughness = 0.7
+    waterColor = '#093c38'
+    fogColor = '#031f1c'
+    ambientColor = '#10b981'
+    turbidity = 0.88
+    hotspotName = 'Amazon River Oceanic Plume & Delta'
+  } else if (basin.includes('Ridge') || (lat >= -38 && lat <= -10 && lon >= 55 && lon <= 80)) {
+    elevation = -2250
+    terrainType = 'mid_ocean_ridge'
+    roughness = 1.75
+    waterColor = '#072e54'
+    fogColor = '#031428'
+    ambientColor = '#0284c7'
+    turbidity = 0.28
+    hotspotName = 'Mid-Ocean Volcanic Spreading Ridge (-2,250 m)'
+  } else if (basin.includes('Coral') || (lat >= -8 && lat <= 7 && lon >= 71 && lon <= 74)) {
+    elevation = -280
+    terrainType = 'coral_atoll'
+    roughness = 1.15
+    waterColor = '#0e7490'
+    fogColor = '#06303d'
+    ambientColor = '#06b6d4'
+    turbidity = 0.45
+    hotspotName = 'Maldives-Chagos Coral Ridge Seamounts'
+  } else {
+    if (chl > 0.8) {
+      elevation = -450
+      terrainType = 'continental_shelf'
+      roughness = 0.95
+      waterColor = '#053f3e'
+      fogColor = '#022120'
+      ambientColor = '#10b981'
+      turbidity = 0.65
+      hotspotName = `${basin} Productive Shelf`
+    } else {
+      elevation = -4200
+      terrainType = 'abyssal_plain'
+      roughness = 0.85
+      waterColor = '#052a42'
+      fogColor = '#02131f'
+      ambientColor = '#0284c7'
+      turbidity = 0.3
+      hotspotName = `${basin} (${Math.abs(elevation).toLocaleString()} m)`
+    }
+  }
+
+  return {
+    basin,
+    hotspotName,
+    seabedElevation: elevation,
+    seabedDepth: Math.abs(elevation),
+    terrainType,
+    terrainRoughness: roughness,
+    waterColor,
+    fogColor,
+    ambientColor,
+    turbidity,
+    chlorophyll: chl,
+    biomass,
+  }
+}
+
+
+
+
 export function getSubgridLocalEstimate(lat: number, lon: number, depth: number, timeIndex = 0): SubgridTelemetry {
   const isLand = isDryLand(lat, lon)
   const basin = isLand ? 'Continental Landmass' : identifyBasin(lat, lon)
@@ -755,6 +1215,7 @@ export function getSubgridLocalEstimate(lat: number, lon: number, depth: number,
     chlorophyll_mg_m3: Math.round(chl * 100) / 100,
     current_speed_m_s: vel.speed,
     current_vector: { u: vel.u, v: vel.v },
+    marine_biomass: computeMarineBiomass(chl, depth, isLand),
     ctd_profile: {
       temperatures: temps,
       salinities: sals,

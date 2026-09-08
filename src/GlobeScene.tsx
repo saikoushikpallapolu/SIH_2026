@@ -12,6 +12,8 @@ import {
   computeSphericalTangent,
   CURRENT_SYSTEMS,
   TSUNAMI_HISTORIC_DATA,
+  OCEAN_HOTSPOTS,
+  type OceanHotspot,
   fetchOceanDataSlice,
   onCurrentsGridUpdate,
 } from './oceanDataEngine'
@@ -717,84 +719,17 @@ function OceanShader({
               globalBaseColor = paletteSpeed(flowGlow) * 0.55;
             }
 
-            // --- 2. 4D DIGITAL TWIN HIGH-RESOLUTION DATASET FIELD (Indian Ocean Basin) ---
-            // Exact NOAA ETOPO cell center bounds:
-            // Latitude:  -44.991667 to 32.008333
-            // Longitude:  20.008333 to 125.008333
-            float uSector = clamp((lon - 20.008333) / (125.008333 - 20.008333), 0.0, 1.0);
-            float vSector = clamp((lat - (-44.991667)) / (32.008333 - (-44.991667)), 0.0, 1.0);
-            float rawDatasetVal = texture2D(uOceanDataSlice, vec2(uSector, vSector)).r;
-
-            // Subtle dynamic wave shimmer to keep ocean surface organically animated
-            float shimmer = sin(vPosition.x * 6.0 + uTime * 0.4) * 0.012;
-
-            vec3 twinColor = vec3(0.0);
-            if (uVariable < 0.5) {
-              // Temperature: fixed physical scientific range [2.0, 32.0] °C
-              float normT = clamp((rawDatasetVal - 2.0) / (32.0 - 2.0) + shimmer, 0.0, 1.0);
-              twinColor = paletteThermal(normT);
-            }
-            else if (uVariable < 1.5) {
-              // Salinity: fixed physical scientific range [30.0, 38.0] PSU
-              float normS = clamp((rawDatasetVal - 30.0) / (38.0 - 30.0), 0.0, 1.0);
-              float isohaline = abs(fract(normS * 11.0) - 0.5);
-              float contour = smoothstep(0.44, 0.48, isohaline) * 0.16;
-              twinColor = paletteHaline(normS) + vec3(contour * 0.6, contour * 0.8, contour);
-            }
-            else if (uVariable < 2.5) {
-              // Chlorophyll: fixed physical scientific range [0.03, 2.5] mg/m³
-              float normC = clamp((rawDatasetVal - 0.03) / (2.5 - 0.03), 0.0, 1.0);
-              twinColor = paletteAlga(normC);
-            }
-            else {
-              // Currents: fixed physical speed range [0.0, 2.0] m/s
-              float normSpd = clamp(rawDatasetVal / 2.0, 0.0, 1.0);
-              twinColor = paletteSpeed(normSpd) * 0.55;
-            }
-
-            // Indian Ocean High-Resolution 4D Digital Twin Sector [20°E, 125°E], [-45°S, 32°N]
-            float inLon = smoothstep(0.535, 0.565, vUv.x) * (1.0 - smoothstep(0.835, 0.865, vUv.x));
-            float inLat = smoothstep(0.235, 0.265, vUv.y) * (1.0 - smoothstep(0.665, 0.695, vUv.y));
-            float inIndianOcean = inLon * inLat;
-
-            // Blend dataset-driven field directly into twin sector
-            vec3 fieldColor = mix(globalBaseColor, twinColor, inIndianOcean * uHasDataSlice);
-
-            float light = max(dot(vNormal, normalize(vec3(1.0, 0.8, 1.2))), 0.0);
-            float overlayIntensity = mix(uOverlayStrength * 0.72, uOverlayStrength * 1.05, inIndianOcean);
-            vec3 litOcean = mix(earth, fieldColor * (0.54 + light * 0.72), overlayIntensity);
-
-            // Subtle sector perimeter indicator (soft glowing dashed outline framing the high-res twin)
-            float borderU = smoothstep(0.003, 0.0, abs(vUv.x - 0.5556)) + smoothstep(0.003, 0.0, abs(vUv.x - 0.8472));
-            float borderV = smoothstep(0.004, 0.0, abs(vUv.y - 0.2500)) + smoothstep(0.004, 0.0, abs(vUv.y - 0.6778));
-            float sectorOutline = clamp(borderU * inLat + borderV * inLon, 0.0, 1.0) * water * 0.35;
-
-            vec3 finalOcean = litOcean + vec3(0.0, 0.95, 1.0) * sectorOutline;
+            // Lighting and seamless ocean surface synthesis
+            float light = max(dot(vNormal, normalize(vec3(0.8, 0.9, 1.0))), 0.0);
+            vec3 litOcean = mix(earth, globalBaseColor * (0.65 + light * 0.60), uOverlayStrength);
 
             // Clean land masking with zero color bleed
-            gl_FragColor = vec4(mix(earth * (0.45 + light * 0.55), finalOcean, water), 1.0);
+            gl_FragColor = vec4(mix(earth * (0.50 + light * 0.50), litOcean, water), 1.0);
           }
         `,
       }),
     [variable, earthMap, waterMask, overlayStrength, sliceTexture]
   )
-
-  useEffect(() => {
-    let active = true
-    fetchOceanDataSlice(variable, timeIndex, depth).then((data) => {
-      if (!active) return
-      if (data) {
-        ;(sliceTexture.image.data as Float32Array).set(data)
-        sliceTexture.needsUpdate = true
-        material.uniforms.uHasDataSlice.value = 1.0
-      } else {
-        material.uniforms.uHasDataSlice.value = 0.0
-      }
-    })
-    return () => {
-      active = false
-    }
-  }, [variable, depth, timeIndex, sliceTexture, material])
 
   useFrame(({ clock }) => {
     material.uniforms.uTime.value = clock.getElapsedTime()
@@ -821,6 +756,115 @@ function OceanShader({
   )
 }
 
+/**
+ * Luminous Bioluminescent Surface Shoals & Plankton Swirls
+ * dynamically circling active feeding grounds (Somali Upwelling, Malabar Shelf, Bay of Bengal, Sri Lanka).
+ */
+function GlobeFishShoals({ timeIndex, active }: { timeIndex: number; active: boolean }) {
+  const meshRef = useRef<THREE.InstancedMesh>(null)
+
+  // Hotspot feeding centers with geographic coordinates
+  const feedingCenters = useMemo(() => [
+    { name: 'Somali Upwelling', lat: 9.5, lon: 51.5, radiusDeg: 2.4, baseSpeed: 0.85 },
+    { name: 'Malabar Coastal Shelf', lat: 12.5, lon: 74.5, radiusDeg: 2.1, baseSpeed: 0.75 },
+    { name: 'Bay of Bengal Ganges Delta', lat: 18.5, lon: 88.5, radiusDeg: 2.6, baseSpeed: 0.80 },
+    { name: 'Sri Lanka Biological Dome', lat: 7.5, lon: 82.5, radiusDeg: 1.8, baseSpeed: 0.70 },
+    { name: 'Mozambique Channel / Agulhas', lat: -23.5, lon: 37.5, radiusDeg: 2.3, baseSpeed: 0.72 },
+  ], [])
+
+  const TOTAL_SHOAL_FISH = 180
+  const fishGeom = useMemo(() => {
+    // Sleek, streamlined biological sliver hugging the water surface
+    const g = new THREE.CylinderGeometry(0.0012, 0.0032, 0.024, 5)
+    g.rotateX(Math.PI / 2)
+    return g
+  }, [])
+
+  const fishOffsets = useMemo(() => {
+    return Array.from({ length: TOTAL_SHOAL_FISH }, (_, i) => {
+      const centerIdx = i % feedingCenters.length
+      return {
+        centerIdx,
+        radiusOffset: (Math.random() - 0.5) * 1.2,
+        phase: Math.random() * Math.PI * 2,
+        speedMul: 0.85 + Math.random() * 0.3,
+        radialJitter: Math.random() * 0.35,
+        elevation: RADIUS + 0.003 + Math.random() * 0.002, // Hugs surface seamlessly
+      }
+    })
+  }, [feedingCenters.length])
+
+  const tempObj = useMemo(() => new THREE.Object3D(), [])
+
+  useEffect(() => {
+    if (!meshRef.current) return
+    const mesh = meshRef.current
+    const cEmerald = new THREE.Color('#10b981')
+    const cCyan = new THREE.Color('#38bdf8')
+    const cAmber = new THREE.Color('#fbbf24')
+
+    for (let i = 0; i < TOTAL_SHOAL_FISH; i++) {
+      const p = i / TOTAL_SHOAL_FISH
+      const col = new THREE.Color()
+      if (p < 0.45) {
+        col.lerpColors(cEmerald, cCyan, p / 0.45)
+      } else {
+        col.lerpColors(cCyan, cAmber, (p - 0.45) / 0.55)
+      }
+      mesh.setColorAt(i, col)
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+  }, [])
+
+  useFrame(({ clock }) => {
+    if (!meshRef.current || !active) return
+    const t = clock.getElapsedTime()
+    const mesh = meshRef.current
+
+    for (let i = 0; i < TOTAL_SHOAL_FISH; i++) {
+      const f = fishOffsets[i]
+      const center = feedingCenters[f.centerIdx]
+      const angle = t * center.baseSpeed * f.speedMul * 0.28 + f.phase
+      const r = center.radiusDeg + f.radiusOffset + Math.sin(t * 1.2 + f.phase) * f.radialJitter
+
+      const lat = center.lat + Math.sin(angle) * r
+      const lon = center.lon + (Math.cos(angle) * r) / Math.cos(THREE.MathUtils.degToRad(center.lat))
+
+      // 3D Cartesian spherical position
+      const pos = latLngToVector3(lat, lon, f.elevation)
+      tempObj.position.copy(pos)
+
+      // Forward direction tangent on sphere
+      const dLat = Math.cos(angle) * center.baseSpeed
+      const dLon = -Math.sin(angle) * center.baseSpeed
+      const nextPos = latLngToVector3(lat + dLat * 0.08, lon + dLon * 0.08, f.elevation)
+      tempObj.lookAt(nextPos)
+
+      // Subtle pulse scale
+      const pulse = 0.9 + 0.2 * Math.sin(t * 2.0 + f.phase)
+      tempObj.scale.set(pulse, pulse, pulse * 1.2)
+      tempObj.updateMatrix()
+      mesh.setMatrixAt(i, tempObj.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = true
+  })
+
+  if (!active) return null
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[fishGeom, undefined, TOTAL_SHOAL_FISH]}
+      frustumCulled={false}
+    >
+      <meshBasicMaterial
+        transparent
+        opacity={0.82}
+        blending={THREE.AdditiveBlending}
+      />
+    </instancedMesh>
+  )
+}
 
 function Atmosphere() {
   return (
@@ -1023,6 +1067,108 @@ function HolographicBeacon({ selection }: { selection: Selection }) {
         <sphereGeometry args={[0.012, 16, 16]} />
         <meshBasicMaterial color="#ffffff" />
       </mesh>
+    </group>
+  )
+}
+
+function GlobeHotspotMarker({
+  spot,
+  isSelected,
+  onSelect,
+}: {
+  spot: OceanHotspot
+  isSelected: boolean
+  onSelect: (spot: OceanHotspot) => void
+}) {
+  const [hovered, setHovered] = useState(false)
+  const pos = useMemo(
+    () => latLngToVector3(spot.latitude, spot.longitude, RADIUS + 0.012),
+    [spot.latitude, spot.longitude]
+  )
+  const normal = useMemo(() => pos.clone().normalize(), [pos])
+  const quaternion = useMemo(() => {
+    const q = new THREE.Quaternion()
+    q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal)
+    return q
+  }, [normal])
+
+  const color = spot.badgeColor || '#10b981'
+
+  return (
+    <group position={pos} quaternion={quaternion}>
+      {/* Interactive clickable hitbox */}
+      <mesh
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect(spot)
+        }}
+        onPointerOver={(e) => {
+          e.stopPropagation()
+          setHovered(true)
+        }}
+        onPointerOut={() => setHovered(false)}
+        position={[0, 0, 0.04]}
+      >
+        <cylinderGeometry args={[0.025, 0.025, 0.08, 12]} />
+        <meshBasicMaterial transparent opacity={0} />
+      </mesh>
+
+      {/* Surface target ring */}
+      <mesh>
+        <ringGeometry args={[0.016, 0.028, 24]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={isSelected ? 0.95 : hovered ? 0.8 : 0.45}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+
+      {/* Vertical Holographic Light Pillar */}
+      <mesh position={[0, 0, 0.035]}>
+        <cylinderGeometry args={[0.002, 0.002, 0.07, 8]} />
+        <meshBasicMaterial color={color} transparent opacity={isSelected || hovered ? 0.95 : 0.65} />
+      </mesh>
+
+      {/* Glowing tip beacon */}
+      <mesh position={[0, 0, 0.07]}>
+        <sphereGeometry args={[isSelected || hovered ? 0.014 : 0.009, 16, 16]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+
+      {/* Hover or Selected floating HTML HUD badge */}
+      {(hovered || isSelected) && (
+        <Html position={[0, 0, 0.11]} center distanceFactor={8} zIndexRange={[100, 0]}>
+          <div
+            style={{
+              background: 'rgba(5, 23, 38, 0.92)',
+              border: `1px solid ${color}`,
+              boxShadow: `0 4px 20px ${color}44`,
+              color: '#ffffff',
+              padding: '5px 9px',
+              borderRadius: '6px',
+              fontSize: '11px',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+              transform: 'translateY(-10px)',
+              backdropFilter: 'blur(8px)',
+              fontFamily: 'Inter, system-ui, sans-serif',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '2px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: color }} />
+              <span style={{ color: '#fff' }}>{spot.name}</span>
+            </div>
+            <span style={{ color: color, fontSize: '9px', fontWeight: 500 }}>
+              {spot.categoryLabel} · {spot.defaultDepth}m
+            </span>
+          </div>
+        </Html>
+      )}
     </group>
   )
 }
@@ -1285,6 +1431,28 @@ function Scene({
           instruments.map((instrument) => (
             <Marker key={instrument.id} instrument={instrument} onSelect={onInstrument} />
           ))}
+
+        {/* 18 Curated Biological Upwelling & Trench Hotspots Beacons */}
+        {!isTsunamiActive && (mode === 'explore' || mode === 'currents') &&
+          OCEAN_HOTSPOTS.map((spot) => (
+            <GlobeHotspotMarker
+              key={spot.id}
+              spot={spot}
+              isSelected={
+                Math.abs(selection.latitude - spot.latitude) < 0.25 &&
+                Math.abs(selection.longitude - spot.longitude) < 0.25
+              }
+              onSelect={(s) => {
+                onSelectPoint({ latitude: s.latitude, longitude: s.longitude })
+              }}
+            />
+          ))}
+
+        {/* Surface Fish Shoals over high-chlorophyll upwelling blooms */}
+        <GlobeFishShoals
+          active={mode === 'explore' && variable === 'chlorophyll'}
+          timeIndex={timeIndex}
+        />
 
         {/* Holographic Sonar Beacon at clicked coordinate */}
         <HolographicBeacon selection={selection} />
