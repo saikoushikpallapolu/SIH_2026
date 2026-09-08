@@ -1004,6 +1004,7 @@ function Marker({
   instrument: Instrument
   onSelect: (instrument: Instrument) => void
 }) {
+  const [hovered, setHovered] = useState(false)
   const groupRef = useRef<THREE.Group>(null)
   const { camera } = useThree()
 
@@ -1062,7 +1063,7 @@ function Marker({
   useFrame(() => {
     if (!groupRef.current) return
     const dist = camera.position.length()
-    const s = THREE.MathUtils.clamp(dist * 0.15, 0.32, 1.2)
+    const s = THREE.MathUtils.clamp(dist * 0.15, 0.32, 1.2) * (hovered ? 1.35 : 1.0)
     groupRef.current.scale.setScalar(s)
   })
 
@@ -1072,6 +1073,14 @@ function Marker({
         event.stopPropagation()
         onSelect(instrument)
       }}
+      onPointerOver={(event) => {
+        event.stopPropagation()
+        setHovered(true)
+      }}
+      onPointerOut={(event) => {
+        event.stopPropagation()
+        setHovered(false)
+      }}
     >
       {/* Glider: wide sinusoidal mission track with multi-layer glow */}
       {trailPoints && (
@@ -1080,47 +1089,113 @@ function Marker({
           <Line
             points={trailPoints}
             color="#ffcf66"
-            lineWidth={9}
+            lineWidth={hovered ? 12 : 9}
             transparent
-            opacity={0.10}
+            opacity={hovered ? 0.20 : 0.10}
           />
           {/* Mid glow band */}
           <Line
             points={trailPoints}
             color="#ffde80"
-            lineWidth={5}
+            lineWidth={hovered ? 7 : 5}
             transparent
-            opacity={0.22}
+            opacity={hovered ? 0.38 : 0.22}
           />
           {/* Core bright line */}
           <Line
             points={trailPoints}
             color="#ffe599"
-            lineWidth={2.2}
+            lineWidth={hovered ? 3.0 : 2.2}
             transparent
-            opacity={0.88}
+            opacity={1.0}
           />
         </>
       )}
+
+      {/* Invisible larger hit target for smooth hover detection */}
+      <mesh position={point} visible={false}>
+        <sphereGeometry args={[0.07, 8, 8]} />
+        <meshBasicMaterial />
+      </mesh>
 
       {/* Dot marker — smaller, 3-layer halo */}
       <group ref={groupRef} position={point}>
         {/* Outer soft halo */}
         <mesh>
-          <sphereGeometry args={[0.045, 16, 16]} />
-          <meshBasicMaterial color={color} transparent opacity={0.10} />
+          <sphereGeometry args={[hovered ? 0.065 : 0.045, 16, 16]} />
+          <meshBasicMaterial color={color} transparent opacity={hovered ? 0.28 : 0.10} />
         </mesh>
         {/* Mid glow */}
         <mesh>
-          <sphereGeometry args={[0.030, 16, 16]} />
-          <meshBasicMaterial color={color} transparent opacity={0.32} />
+          <sphereGeometry args={[hovered ? 0.042 : 0.030, 16, 16]} />
+          <meshBasicMaterial color={color} transparent opacity={hovered ? 0.55 : 0.32} />
         </mesh>
         {/* Solid core */}
         <mesh>
           <sphereGeometry args={[0.016, 16, 16]} />
-          <meshBasicMaterial color={color} />
+          <meshBasicMaterial color={hovered ? '#ffffff' : color} />
         </mesh>
       </group>
+
+      {/* Floating Hover Tooltip / Badge for Gliders and Argo Floats */}
+      {hovered && (
+        <Html
+          position={[point.x, point.y, point.z]}
+          center
+          pointerEvents="none"
+          zIndexRange={[100, 0]}
+        >
+          <div
+            style={{
+              background: 'rgba(3, 15, 29, 0.94)',
+              border: `1px solid ${color}`,
+              boxShadow: `0 4px 20px ${color}44, 0 0 12px ${color}22`,
+              color: '#ffffff',
+              padding: '6px 10px',
+              borderRadius: '8px',
+              fontSize: '11px',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+              userSelect: 'none',
+              transform: 'translateY(-20px)',
+              backdropFilter: 'blur(10px)',
+              fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '3px',
+              maxWidth: '260px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span
+                style={{
+                  width: '7px',
+                  height: '7px',
+                  borderRadius: '50%',
+                  background: color,
+                  boxShadow: `0 0 6px ${color}`,
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ color: '#fff', fontSize: '11.5px', fontWeight: 700, letterSpacing: '0.02em' }}>
+                {instrument.name}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9.5px', fontWeight: 500, color: 'rgba(255, 255, 255, 0.75)' }}>
+              <span style={{ color: color, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {instrument.kind}
+              </span>
+              <span>•</span>
+              <span>
+                {Math.abs(instrument.latitude).toFixed(2)}°{instrument.latitude >= 0 ? 'N' : 'S'}, {Math.abs(instrument.longitude).toFixed(2)}°{instrument.longitude >= 0 ? 'E' : 'W'}
+              </span>
+              <span>•</span>
+              <span style={{ color: '#38bdf8' }}>{instrument.depth}m</span>
+            </div>
+          </div>
+        </Html>
+      )}
     </group>
   )
 }
