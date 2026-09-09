@@ -1010,11 +1010,28 @@ function Marker({
 }) {
   const groupRef = useRef<THREE.Group>(null)
   const { camera } = useThree()
+  const [hovered, setHovered] = useState(false)
 
   const point = useMemo(
-    () => latLngToVector3(instrument.latitude, instrument.longitude, RADIUS + 0.042),
+    () => latLngToVector3(instrument.latitude, instrument.longitude, RADIUS + 0.038),
     [instrument.latitude, instrument.longitude]
   )
+
+  const normal = useMemo(() => point.clone().normalize(), [point])
+  const quaternion = useMemo(() => {
+    const q = new THREE.Quaternion()
+    q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal)
+    return q
+  }, [normal])
+
+  // Reset body cursor on unmount if hovered
+  useEffect(() => {
+    return () => {
+      if (hovered) {
+        document.body.style.cursor = 'auto'
+      }
+    }
+  }, [hovered])
 
   // Color scheme per instrument type
   const color =
@@ -1025,36 +1042,31 @@ function Marker({
         : '#38bdf8'
 
   // Glider: build a long sinusoidal back-trace path using heading
-  // 20° arc ≈ 2200 km, with lateral meander simulating ocean-current drift
   const trailPoints = useMemo(() => {
     if (instrument.kind !== 'Glider' || instrument.heading === undefined) return null
 
     const backHeadingRad = THREE.MathUtils.degToRad(instrument.heading + 180)
-    // Forward direction components (lat/lon axes)
     const dLat = Math.cos(backHeadingRad)
     const dLon = Math.sin(backHeadingRad)
-    // Perpendicular (90° left of travel direction) for lateral meander
     const pLat = -dLon
     const pLon = dLat
     const cosLat = Math.max(0.15, Math.cos(THREE.MathUtils.degToRad(instrument.latitude)))
 
-    const steps = 80        // high step count for smooth curve
-    const totalDistDeg = 20 // ~2200 km path length
-    const meanderAmp = 2.8  // arc amplitude in degrees (wider single bow)
-    const meanderFreq = 0.5 // half sine cycle = one smooth circular arc
+    const steps = 80
+    const totalDistDeg = 20
+    const meanderAmp = 2.8
+    const meanderFreq = 0.5
     const pts: THREE.Vector3[] = []
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps
       const dist = t * totalDistDeg
-      // Sinusoidal lateral offset — grows from 0, peaks mid-track, fades near tail
-      const envelope = Math.sin(t * Math.PI) // fade in & out at ends
+      const envelope = Math.sin(t * Math.PI)
       const lateral = meanderAmp * envelope * Math.sin(t * meanderFreq * 2 * Math.PI)
 
       const lat = instrument.latitude + dLat * dist + pLat * lateral
       const lon = instrument.longitude + (dLon * dist + pLon * lateral) / cosLat
 
-      // Stop trail the moment it crosses onto land — gliders can't traverse land
       if (i > 0 && isDryLand(lat, lon)) break
 
       pts.push(latLngToVector3(lat, lon, RADIUS + 0.028))
@@ -1066,21 +1078,15 @@ function Marker({
   useFrame(() => {
     if (!groupRef.current) return
     const dist = camera.position.length()
-    const s = THREE.MathUtils.clamp(dist * 0.15, 0.32, 1.2)
+    const s = THREE.MathUtils.clamp(dist * 0.15, 0.32, 1.2) * (hovered ? 1.45 : 1.0)
     groupRef.current.scale.setScalar(s)
   })
 
   return (
-    <group
-      onClick={(event) => {
-        event.stopPropagation()
-        onSelect(instrument)
-      }}
-    >
+    <group>
       {/* Glider: wide sinusoidal mission track with multi-layer glow */}
       {trailPoints && (
         <>
-          {/* Wide soft outer glow */}
           <Line
             points={trailPoints}
             color="#ffcf66"
@@ -1088,7 +1094,6 @@ function Marker({
             transparent
             opacity={0.10}
           />
-          {/* Mid glow band */}
           <Line
             points={trailPoints}
             color="#ffde80"
@@ -1096,7 +1101,6 @@ function Marker({
             transparent
             opacity={0.22}
           />
-          {/* Core bright line */}
           <Line
             points={trailPoints}
             color="#ffe599"
@@ -1107,23 +1111,106 @@ function Marker({
         </>
       )}
 
-      {/* Dot marker — smaller, 3-layer halo */}
-      <group ref={groupRef} position={point}>
+      {/* Dot marker — oriented with surface normal and direct raycast hitbox */}
+      <group ref={groupRef} position={point} quaternion={quaternion}>
+        {/* Interactive clickable & hover hitbox */}
+        <mesh
+          position={[0, 0, 0.02]}
+          onClick={(e) => {
+            e.stopPropagation()
+            onSelect(instrument)
+          }}
+          onPointerOver={(e) => {
+            e.stopPropagation()
+            setHovered(true)
+            document.body.style.cursor = 'pointer'
+          }}
+          onPointerOut={(e) => {
+            e.stopPropagation()
+            setHovered(false)
+            document.body.style.cursor = 'auto'
+          }}
+        >
+          <sphereGeometry args={[0.075, 16, 16]} />
+          <meshBasicMaterial transparent opacity={0} />
+        </mesh>
+
         {/* Outer soft halo */}
         <mesh>
           <sphereGeometry args={[0.045, 16, 16]} />
-          <meshBasicMaterial color={color} transparent opacity={0.10} />
+          <meshBasicMaterial color={color} transparent opacity={hovered ? 0.48 : 0.12} />
         </mesh>
         {/* Mid glow */}
         <mesh>
           <sphereGeometry args={[0.030, 16, 16]} />
-          <meshBasicMaterial color={color} transparent opacity={0.32} />
+          <meshBasicMaterial color={color} transparent opacity={hovered ? 0.78 : 0.35} />
         </mesh>
         {/* Solid core */}
         <mesh>
-          <sphereGeometry args={[0.016, 16, 16]} />
+          <sphereGeometry args={[0.018, 16, 16]} />
           <meshBasicMaterial color={color} />
         </mesh>
+
+        {/* Floating HTML Instrument Name HUD Badge on Hover */}
+        {hovered && (
+          <Html
+            position={[0, 0, 0.10]}
+            center
+            pointerEvents="none"
+            zIndexRange={[150, 0]}
+          >
+            <div
+              style={{
+                background: 'rgba(5, 23, 38, 0.94)',
+                border: `1px solid ${color}`,
+                boxShadow: `0 4px 18px ${color}44, 0 0 8px ${color}22`,
+                color: '#ffffff',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+                userSelect: 'none',
+                transform: 'translateY(-14px)',
+                backdropFilter: 'blur(10px)',
+                fontFamily: 'Inter, system-ui, sans-serif',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px',
+                maxWidth: '240px',
+                animation: 'fadeIn 0.15s ease-out',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span
+                  style={{
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    background: color,
+                    boxShadow: `0 0 6px ${color}`,
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ color: '#ffffff', fontSize: '11.5px', fontWeight: 600, letterSpacing: '0.2px' }}>
+                  {instrument.name}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: '#94a3b8' }}>
+                <span style={{ color: color, fontWeight: 500 }}>{instrument.kind}</span>
+                <span>•</span>
+                <span>{Math.round(instrument.depth)}m depth</span>
+                {instrument.temperature !== undefined && (
+                  <>
+                    <span>•</span>
+                    <span style={{ color: '#e2e8f0' }}>{instrument.temperature.toFixed(1)}°C</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </Html>
+        )}
       </group>
     </group>
   )
