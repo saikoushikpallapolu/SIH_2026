@@ -6,14 +6,23 @@
  * and seamless integration with FastAPI local binary cubes.
  */
 import * as THREE from 'three'
-import type {
-  OceanVariable,
-  TsunamiScenario,
-  SpatialBoundary,
-  TerrainSliceData,
-  OceanPointProfile,
+import {
+  DEPTH_LEVELS,
+  type DepthLevel,
+  type GodasSubgridMeta,
+  type GodasSubgridData,
+  type GodasSampleResult,
+  type SampleStatus,
+  type OceanVariable,
+  type TsunamiScenario,
+  type SpatialBoundary,
+  type TerrainSliceData,
+  type OceanPointProfile,
 } from './types'
 import { getCachedTerrain, setCachedTerrain } from './terrainCache'
+
+export { DEPTH_LEVELS }
+export type { DepthLevel, GodasSubgridMeta, GodasSubgridData, GodasSampleResult, SampleStatus }
 
 export const GLOBE_RADIUS = 1.55
 export const API_BASE = ''
@@ -421,27 +430,128 @@ export function identifyBasin(lat: number, lon: number): string {
   return 'Indian Ocean Pelagic Waters'
 }
 
+/**
+ * Month-index range for real NOAA OISST v2.1 coverage.
+ * Month index 0 = 2000-01, so 240 = 2020-01, 299 = 2024-12.
+ * Months outside this range do NOT have locally-stored real daily SST.
+ */
+export const OISST_MONTH_START = 240
+export const OISST_MONTH_END = 299
+
+/**
+ * Returns true when the given month index (0-based, epoch = 2000-01) is
+ * covered by the local NOAA OISST v2.1 daily dataset (2020-01 to 2024-12).
+ */
+export function isSstMonthAvailable(month: number): boolean {
+  const m = Math.round(month)
+  return m >= OISST_MONTH_START && m <= OISST_MONTH_END
+}
+
+/** Discriminated result for SST-specific slice fetch. */
+export type SstSliceStatus =
+  | { status: 'available'; data: Float32Array }
+  | { status: 'unavailable'; reason: string }
+  | { status: 'error'; reason: string }
+
+/**
+ * Fetches a real NOAA OISST v2.1 daily SST slice (308 × 420, Float32).
+ * Returns an explicit status so callers can distinguish:
+ *   'available'   – real data loaded, data field contains the Float32Array
+ *   'unavailable' – month is outside 2020-2024 coverage (HTTP 400/no data)
+ *   'error'       – network or server error unrelated to coverage
+ *
+ * Never returns synthetic data. Callers must handle the 'unavailable' state
+ * by showing a neutral ocean rather than falling back to procedural SST.
+ */
+export async function fetchSstSlice(
+  month: number,
+  timestamp?: string
+): Promise<SstSliceStatus> {
+  if (!isSstMonthAvailable(month) && !timestamp) {
+    return {
+      status: 'unavailable',
+      reason: `Month ${month} (${2000 + Math.floor(month / 12)}-${String((month % 12) + 1).padStart(2, '0')}) is outside local OISST coverage (2020-01 to 2024-12).`,
+    }
+  }
+
+  const clampedMonth = Math.max(0, Math.min(299, Math.round(month)))
+  let url = `${API_BASE}/api/slice?variable=temperature&month=${clampedMonth}&depth=0`
+  if (timestamp) url += `&date=${encodeURIComponent(timestamp)}`
+
+  try {
+    const resp = await fetch(url)
+    if (resp.status === 400) {
+      const detail = await resp.text().catch(() => 'Outside coverage')
+      return { status: 'unavailable', reason: detail }
+    }
+    if (!resp.ok) {
+      return { status: 'error', reason: `HTTP ${resp.status}` }
+    }
+    const buf = await resp.arrayBuffer()
+    return { status: 'available', data: new Float32Array(buf) }
+  } catch (err) {
+    return { status: 'error', reason: String(err) }
+  }
+}
+
+/**
+ * Fetches a real ESA OC-CCI monthly chlorophyll slice (309 × 421, Float32).
+ * Returns an explicit status identical to SstSliceStatus:
+ *   'available'   – real data loaded (chl in mg/m³, -999.0 = land/missing)
+ *   'unavailable' – server reports no data for the requested month
+ *   'error'       – network or server error
+ *
+ * NOTE: The raw data has latitude stored descending (row 0 = 31.98°N).
+ * The shader must invert the v-coordinate: sv = 1.0 - clamp((lat+45)/77, 0, 1)
+ * to correctly map geographic latitude to texture UV space.
+ *
+ * Coverage: all 25-year cube months 0–299 (2000-01 to 2024-12) are covered.
+ */
+export async function fetchChlSlice(month: number): Promise<SstSliceStatus> {
+  const clampedMonth = Math.max(0, Math.min(299, Math.round(month)))
+  const url = `${API_BASE}/api/real/chl/slice?month=${clampedMonth}`
+  try {
+    const resp = await fetch(url)
+    if (resp.status === 400) {
+      const detail = await resp.text().catch(() => 'Outside CCI coverage')
+      return { status: 'unavailable', reason: detail }
+    }
+    if (!resp.ok) {
+      return { status: 'error', reason: `HTTP ${resp.status}` }
+    }
+    const buf = await resp.arrayBuffer()
+    return { status: 'available', data: new Float32Array(buf) }
+  } catch (err) {
+    return { status: 'error', reason: String(err) }
+  }
+}
+
 // In-memory cache for 2D ocean data slices: key = "variable_month_depth"
 const sliceCache = new Map<string, Float32Array>()
 
+
 /**
- * Fetches a dynamic 2D Float32 slice (309 x 421) from the FastAPI binary cubes engine.
+ * Fetches a dynamic 2D Float32 slice (309 x 421 or 308 x 420 for real OISST) from the FastAPI binary cubes engine.
  */
 export async function fetchOceanDataSlice(
   variable: OceanVariable,
   month: number,
-  depth: number
+  depth: number,
+  timestamp?: string
 ): Promise<Float32Array | null> {
   const clampedMonth = Math.max(0, Math.min(299, Math.round(month)))
   const clampedDepth = Math.max(0, Math.min(5000, depth))
-  const cacheKey = `${variable}_${clampedMonth}_${clampedDepth.toFixed(1)}`
+  const cacheKey = `${variable}_${clampedMonth}_${clampedDepth.toFixed(1)}_${timestamp || ''}`
 
   if (sliceCache.has(cacheKey)) {
     return sliceCache.get(cacheKey)!
   }
 
   try {
-    const url = `${API_BASE}/api/slice?variable=${variable}&month=${clampedMonth}&depth=${clampedDepth}`
+    let url = `${API_BASE}/api/slice?variable=${variable}&month=${clampedMonth}&depth=${clampedDepth}`
+    if (timestamp) {
+      url += `&date=${encodeURIComponent(timestamp)}`
+    }
     const resp = await fetch(url)
     if (resp.ok) {
       const buf = await resp.arrayBuffer()
@@ -455,6 +565,26 @@ export async function fetchOceanDataSlice(
     }
   } catch (err) {
     console.warn('Failed to fetch 2D ocean slice:', err)
+  }
+  return null
+}
+
+let _oisstMaskCache: Uint8Array | null = null
+
+/**
+ * Fetches the 420x308 real NOAA OISST land/sea boolean mask (0=land, 1=ocean).
+ */
+export async function fetchOisstLandMask(): Promise<Uint8Array | null> {
+  if (_oisstMaskCache) return _oisstMaskCache
+  try {
+    const res = await fetch(`${API_BASE}/api/real/sst/mask`)
+    if (res.ok) {
+      const buffer = await res.arrayBuffer()
+      _oisstMaskCache = new Uint8Array(buffer)
+      return _oisstMaskCache
+    }
+  } catch (err) {
+    console.warn('Failed to fetch OISST land mask:', err)
   }
   return null
 }
@@ -2139,4 +2269,614 @@ export async function fetchOceanPointProfile(
   }
 }
 
+/**
+ * Converts an ISO calendar date string (YYYY-MM-DD) into a 0..299 month index
+ * relative to the reanalysis baseline epoch 2000-01-01.
+ * Strict UTC/numeric parsing — zero locale dependencies.
+ */
+export function timestampToMonthIndex(isoDate: string): number {
+  if (!isoDate) return 292
+  const parts = isoDate.split('-')
+  const year = parseInt(parts[0], 10)
+  const month = parseInt(parts[1], 10)
+  if (isNaN(year) || isNaN(month)) return 292
+  return Math.max(0, Math.min(299, (year - 2000) * 12 + (month - 1)))
+}
+
+/**
+ * Converts a 0..299 month index into an ISO calendar date string (YYYY-MM-01).
+ * Maps month index 0 to 2000-01-01 and 299 to 2024-12-01.
+ */
+export function monthIndexToTimestamp(monthIndex: number): string {
+  const clamped = Math.max(0, Math.min(299, Math.round(monthIndex)))
+  const year = 2000 + Math.floor(clamped / 12)
+  const month = (clamped % 12) + 1
+  return `${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-01`
+}
+
+/**
+ * Temporal metadata resolution for specific scientific oceanographic providers.
+ */
+export interface DatasetTimeResolution {
+  canonicalTimestamp: string
+  datasetId: 'oisst_v2_1' | 'godas' | 'esa_cci' | 'synthetic_25yr'
+  resolvedDate: string
+  monthIndex: number
+  isCovered: boolean
+  coverageRange: [string, string]
+}
+
+/**
+ * Canonical Application Time Architecture — Dataset Resolution Helper.
+ * 
+ * Maps the universal ISO calendar date (YYYY-MM-DD) to dataset-specific
+ * spatial-temporal coordinates, temporal bounds, or slice dates.
+ */
+export function resolveDatasetTimestamp(
+  datasetOrVariable: OceanVariable | 'oisst_v2_1' | 'godas' | 'esa_cci',
+  canonicalTimestamp: string
+): DatasetTimeResolution {
+  const [yearStr, monthStr, dayStr] = (canonicalTimestamp || '2024-05-01').split('-')
+  const year = parseInt(yearStr, 10)
+  const month = parseInt(monthStr, 10)
+  const day = parseInt(dayStr, 10)
+  const safeYear = isNaN(year) ? 2024 : year
+  const safeMonth = isNaN(month) ? 5 : Math.max(1, Math.min(12, month))
+  const safeDay = isNaN(day) ? 1 : Math.max(1, Math.min(31, day))
+
+  const monthIndex = Math.max(0, Math.min(299, (safeYear - 2000) * 12 + (safeMonth - 1)))
+  const formattedIso = `${safeYear.toString().padStart(4, '0')}-${safeMonth.toString().padStart(2, '0')}-${safeDay.toString().padStart(2, '0')}`
+
+  // 1. NOAA OISST v2.1 Daily (Coverage: 2020-01-01 to 2024-12-31)
+  if (datasetOrVariable === 'temperature' || datasetOrVariable === 'oisst_v2_1') {
+    const isCovered = safeYear >= 2020 && safeYear <= 2024
+    return {
+      canonicalTimestamp: formattedIso,
+      datasetId: 'oisst_v2_1',
+      resolvedDate: formattedIso,
+      monthIndex,
+      isCovered,
+      coverageRange: ['2020-01-01', '2024-12-31'],
+    }
+  }
+
+  // 2. GODAS Subsurface Hydrography (Verified real monthly coverage: 2022-01-01 to 2024-12-01)
+  if (datasetOrVariable === 'salinity' || datasetOrVariable === 'godas') {
+    const isCovered = safeYear >= 2022 && safeYear <= 2024
+    return {
+      canonicalTimestamp: formattedIso,
+      datasetId: 'godas',
+      resolvedDate: `${safeYear.toString().padStart(4, '0')}-${safeMonth.toString().padStart(2, '0')}-01`,
+      monthIndex,
+      isCovered,
+      coverageRange: ['2022-01-01', '2024-12-01'],
+    }
+  }
+
+  // 3. ESA CCI Ocean Colour (Coverage: 2000-01-01 to 2024-12-31)
+  if (datasetOrVariable === 'chlorophyll' || datasetOrVariable === 'esa_cci') {
+    return {
+      canonicalTimestamp: formattedIso,
+      datasetId: 'esa_cci',
+      resolvedDate: `${safeYear.toString().padStart(4, '0')}-${safeMonth.toString().padStart(2, '0')}-01`,
+      monthIndex,
+      isCovered: safeYear >= 2000 && safeYear <= 2024,
+      coverageRange: ['2000-01-01', '2024-12-31'],
+    }
+  }
+
+  // Fallback: continuous 25-year reanalysis engine
+  return {
+    canonicalTimestamp: formattedIso,
+    datasetId: 'synthetic_25yr',
+    resolvedDate: `${safeYear.toString().padStart(4, '0')}-${safeMonth.toString().padStart(2, '0')}-01`,
+    monthIndex,
+    isCovered: safeYear >= 2000 && safeYear <= 2024,
+    coverageRange: ['2000-01-01', '2024-12-31'],
+  }
+}
+
+// In-memory cache for GODAS 3D regional subgrids (1 fetch per region/timestamp change)
+const godasSubgridCache = new Map<string, GodasSubgridData>()
+
+/**
+ * Fetches real NOAA GODAS 3D regional subgrid across all 16 scientific depth levels.
+ * Consumes high-performance binary payload (JSON header + Float32Array multi-variable tensor).
+ */
+export async function fetchGodasRegionalSubgrid(
+  bbox: [number, number, number, number],
+  date: string = '2024-05-01'
+): Promise<GodasSubgridData | null> {
+  const [minLat, maxLat, minLon, maxLon] = bbox
+  const dateKey = date.length >= 7 ? `${date.slice(0, 7)}-01` : date
+  const cacheKey = `${minLat.toFixed(3)}_${maxLat.toFixed(3)}_${minLon.toFixed(3)}_${maxLon.toFixed(3)}_${dateKey}`
+
+  if (godasSubgridCache.has(cacheKey)) {
+    return godasSubgridCache.get(cacheKey)!
+  }
+
+  try {
+    const url = `${API_BASE}/api/real/godas/subgrid?min_lat=${minLat}&max_lat=${maxLat}&min_lon=${minLon}&max_lon=${maxLon}&date=${dateKey}&format=bin`
+    const res = await fetch(url)
+    if (!res.ok) {
+      if (res.status === 422) {
+        console.warn(`GODAS 3D data outside verified range (2022-2024): ${dateKey}`)
+      }
+      return null
+    }
+
+    const buffer = await res.arrayBuffer()
+    if (buffer.byteLength < 4) return null
+
+    const view = new DataView(buffer)
+    const headerLen = view.getUint32(0, true)
+    if (buffer.byteLength < 4 + headerLen) return null
+
+    const headerBytes = new Uint8Array(buffer, 4, headerLen)
+    const headerJson = new TextDecoder().decode(headerBytes)
+    const meta: GodasSubgridMeta = JSON.parse(headerJson)
+
+    const tCount = 16 * meta.t_shape[1] * meta.t_shape[2]
+    const cCount = 16 * meta.c_shape[1] * meta.c_shape[2]
+
+    let offset = 4 + headerLen
+    if (offset % 4 !== 0) {
+      offset += 4 - (offset % 4)
+    }
+
+    const temperature = new Float32Array(buffer, offset, tCount)
+    offset += tCount * 4
+
+    const salinity = new Float32Array(buffer, offset, tCount)
+    offset += tCount * 4
+
+    const density = new Float32Array(buffer, offset, tCount)
+    offset += tCount * 4
+
+    const currentsU = new Float32Array(buffer, offset, cCount)
+    offset += cCount * 4
+
+    const currentsV = new Float32Array(buffer, offset, cCount)
+
+    const subgridData: GodasSubgridData = {
+      meta,
+      temperature,
+      salinity,
+      density,
+      currentsU,
+      currentsV,
+    }
+
+    godasSubgridCache.set(cacheKey, subgridData)
+    return subgridData
+  } catch (err) {
+    console.warn('Failed to fetch real GODAS 3D subgrid:', err)
+    return null
+  }
+}
+
+export interface EtopoBedrockGrid {
+  dataset: string
+  spatial_resolution_deg: number
+  n_lat: number
+  n_lon: number
+  lat_min: number
+  lat_max: number
+  lon_min: number
+  lon_max: number
+  grid: Float32Array
+}
+
+let _etopoBathymetry: EtopoBedrockGrid | null = null
+
+/**
+ * Loads the native 0.25° NOAA ETOPO 2022 bedrock grid once into client memory (~508 KB).
+ */
+export async function loadEtopoBathymetry(): Promise<EtopoBedrockGrid | null> {
+  if (_etopoBathymetry) return _etopoBathymetry
+  try {
+    // 1. Fetch metadata (try /api/ first, fallback to /static/)
+    let metaRes = await fetch(`${API_BASE}/api/terrain/bathymetry`)
+    if (!metaRes.ok) {
+      metaRes = await fetch(`${API_BASE}/static/terrain/bathymetry_meta.json`)
+    }
+    if (!metaRes.ok) return null
+    const meta = await metaRes.json()
+
+    // 2. Fetch binary grid
+    let binRes = await fetch(`${API_BASE}/api/terrain/bathymetry-grid`)
+    if (!binRes.ok) {
+      binRes = await fetch(`${API_BASE}/static/terrain/bathymetry_io.bin`)
+    }
+    if (!binRes.ok) return null
+    const buffer = await binRes.arrayBuffer()
+    const grid = new Float32Array(buffer)
+
+    _etopoBathymetry = {
+      dataset: meta.dataset,
+      spatial_resolution_deg: meta.spatial_resolution_deg,
+      n_lat: meta.n_lat,
+      n_lon: meta.n_lon,
+      lat_min: meta.lat_min,
+      lat_max: meta.lat_max,
+      lon_min: meta.lon_min,
+      lon_max: meta.lon_max,
+      grid,
+    }
+    return _etopoBathymetry
+  } catch (err) {
+    console.warn('Could not load native ETOPO bedrock grid:', err)
+    return null
+  }
+}
+
+/**
+ * Returns exact seabed depth and land status using native 0.25° NOAA ETOPO 2022 bedrock grid.
+ */
+export function getEtopoSeabedDepth(lat: number, lon: number): { isLand: boolean; seabedDepth_m: number; elevation_m: number } | null {
+  if (!_etopoBathymetry) return null
+  const { n_lat, n_lon, lat_min, lat_max, lon_min, lon_max, grid } = _etopoBathymetry
+
+  if (lat < lat_min || lat > lat_max || lon < lon_min || lon > lon_max) {
+    return null
+  }
+
+  const i_f = ((lat - lat_min) / (lat_max - lat_min)) * (n_lat - 1)
+  const j_f = ((lon - lon_min) / (lon_max - lon_min)) * (n_lon - 1)
+
+  const i0 = Math.max(0, Math.min(n_lat - 2, Math.floor(i_f)))
+  const j0 = Math.max(0, Math.min(n_lon - 2, Math.floor(j_f)))
+  const i1 = i0 + 1
+  const j1 = j0 + 1
+
+  const u = j_f - j0
+  const v = i_f - i0
+
+  const e00 = grid[i0 * n_lon + j0]
+  const e10 = grid[i0 * n_lon + j1]
+  const e01 = grid[i1 * n_lon + j0]
+  const e11 = grid[i1 * n_lon + j1]
+
+  const elevation = (1 - u) * (1 - v) * e00 + u * (1 - v) * e10 + (1 - u) * v * e01 + u * v * e11
+  const isLand = elevation >= 0
+  const seabedDepth_m = isLand ? 0 : -elevation
+
+  return { isLand, seabedDepth_m, elevation_m: elevation }
+}
+
+/**
+ * Authoritative seabed depth and land status resolver.
+ * Priority 1: Native 0.25° NOAA ETOPO grid (if loaded)
+ * Priority 2: Regional terrain slice (dynamically parsed via terrainData.grid_res and bounds)
+ * Priority 3: Fallback dry land polygon heuristic
+ */
+export function getAuthoritativeSeabedDepth(
+  lat: number,
+  lon: number,
+  regionalTerrain?: TerrainSliceData | null
+): { isLand: boolean; seabedDepth_m: number; elevation_m: number } {
+  const etopo = getEtopoSeabedDepth(lat, lon)
+  if (etopo !== null) return etopo
+
+  if (regionalTerrain) {
+    return getSeabedDepthFromTerrain(regionalTerrain, lat, lon)
+  }
+
+  const isLand = isDryLand(lat, lon)
+  return { isLand, seabedDepth_m: isLand ? 0 : 3500, elevation_m: isLand ? 50 : -3500 }
+}
+
+/**
+ * Bilinearly interpolates seabed depth and land status from a regional TerrainSliceData.
+ * Dynamically uses terrainData.grid_res and terrainData.bounds without hardcoding any assumption.
+ */
+export function getSeabedDepthFromTerrain(
+  terrainData: TerrainSliceData,
+  lat: number,
+  lon: number
+): { isLand: boolean; seabedDepth_m: number; elevation_m: number } {
+  const { grid_res: res, bounds, elevation_grid } = terrainData
+  const { min_lat, max_lat, min_lon, max_lon } = bounds
+
+  if (lat < min_lat || lat > max_lat || lon < min_lon || lon > max_lon) {
+    const isLand = isDryLand(lat, lon)
+    return { isLand, seabedDepth_m: isLand ? 0 : 3500, elevation_m: isLand ? 50 : -3500 }
+  }
+
+  // Row 0 is North (max_lat), Row res-1 is South (min_lat)
+  const r_f = ((max_lat - lat) / (max_lat - min_lat)) * (res - 1)
+  // Col 0 is West (min_lon), Col res-1 is East (max_lon)
+  const c_f = ((lon - min_lon) / (max_lon - min_lon)) * (res - 1)
+
+  const r0 = Math.max(0, Math.min(res - 2, Math.floor(r_f)))
+  const c0 = Math.max(0, Math.min(res - 2, Math.floor(c_f)))
+  const r1 = r0 + 1
+  const c1 = c0 + 1
+
+  const u = c_f - c0
+  const v = r_f - r0
+
+  const e00 = elevation_grid[r0 * res + c0]
+  const e10 = elevation_grid[r0 * res + c1]
+  const e01 = elevation_grid[r1 * res + c0]
+  const e11 = elevation_grid[r1 * res + c1]
+
+  const elevation = (1 - u) * (1 - v) * e00 + u * (1 - v) * e10 + (1 - u) * v * e01 + u * v * e11
+  const isLand = elevation >= 0
+  const seabedDepth_m = isLand ? 0 : -elevation
+
+  return { isLand, seabedDepth_m, elevation_m: elevation }
+}
+
+/**
+ * Bilinearly interpolates 2D slice at depthLevelIndex on a structured grid with coords.
+ * Excludes any corner with fill value (-999.0) or NaN.
+ * Normalizes weights ONLY among valid ocean neighbors.
+ * Returns null if valid weight sum is less than threshold (e.g. all corners land/seabed).
+ */
+function interpolateValidNeighbors(
+  slice3D: Float32Array,
+  depthIdx: number,
+  nLat: number,
+  nLon: number,
+  lats: number[],
+  lons: number[],
+  lat: number,
+  lon: number,
+  fillValue: number = -999.0
+): number | null {
+  // Find lat index in ascending lats
+  let latI = -1
+  for (let i = 0; i < lats.length - 1; i++) {
+    if (lat >= lats[i] && lat <= lats[i + 1]) {
+      latI = i
+      break
+    }
+  }
+  if (latI === -1) {
+    if (lat < lats[0]) latI = 0
+    else latI = lats.length - 2
+  }
+
+  // Find lon index in ascending lons
+  let lonJ = -1
+  for (let j = 0; j < lons.length - 1; j++) {
+    if (lon >= lons[j] && lon <= lons[j + 1]) {
+      lonJ = j
+      break
+    }
+  }
+  if (lonJ === -1) {
+    if (lon < lons[0]) lonJ = 0
+    else lonJ = lons.length - 2
+  }
+
+  latI = Math.max(0, Math.min(lats.length - 2, latI))
+  lonJ = Math.max(0, Math.min(lons.length - 2, lonJ))
+
+  const latSpan = lats[latI + 1] - lats[latI]
+  const lonSpan = lons[lonJ + 1] - lons[lonJ]
+
+  const v = latSpan > 0 ? (lat - lats[latI]) / latSpan : 0
+  const u = lonSpan > 0 ? (lon - lons[lonJ]) / lonSpan : 0
+
+  const uClamp = Math.max(0, Math.min(1, u))
+  const vClamp = Math.max(0, Math.min(1, v))
+
+  const baseOffset = depthIdx * nLat * nLon
+  const idx00 = baseOffset + latI * nLon + lonJ
+  const idx10 = baseOffset + latI * nLon + (lonJ + 1)
+  const idx01 = baseOffset + (latI + 1) * nLon + lonJ
+  const idx11 = baseOffset + (latI + 1) * nLon + (lonJ + 1)
+
+  const val00 = slice3D[idx00]
+  const val10 = slice3D[idx10]
+  const val01 = slice3D[idx01]
+  const val11 = slice3D[idx11]
+
+  const w00 = (1 - uClamp) * (1 - vClamp)
+  const w10 = uClamp * (1 - vClamp)
+  const w01 = (1 - uClamp) * vClamp
+  const w11 = uClamp * vClamp
+
+  let sumVal = 0
+  let sumWeight = 0
+
+  const isValid = (x: number) => !isNaN(x) && Math.abs(x - fillValue) > 1.0 && Math.abs(x) < 900.0
+
+  if (isValid(val00)) { sumVal += val00 * w00; sumWeight += w00 }
+  if (isValid(val10)) { sumVal += val10 * w10; sumWeight += w10 }
+  if (isValid(val01)) { sumVal += val01 * w01; sumWeight += w01 }
+  if (isValid(val11)) { sumVal += val11 * w11; sumWeight += w11 }
+
+  if (sumWeight < 0.20) return null
+  return sumVal / sumWeight
+}
+
+/**
+ * Samples real NOAA GODAS 3D subgrid at a geographic coordinate and scientific depth level.
+ * Explicitly distinguishes:
+ *  - 'valid': authentic oceanographic measurement
+ *  - 'below_seabed': requested depth exceeds local ocean floor
+ *  - 'land': coordinate is continental landmass
+ *  - 'no_data': missing observation or outside domain
+ * NEVER interpolates across land or missing seabed regions.
+ */
+export function sampleGodasSubgrid(
+  subgrid: GodasSubgridData,
+  lat: number,
+  lon: number,
+  depthLevelIndex: number,
+  seabedDepth_m?: number,
+  isLand?: boolean
+): GodasSampleResult {
+  const depth_m = DEPTH_LEVELS[Math.max(0, Math.min(15, depthLevelIndex))]
+  const effectiveLand = isLand ?? isDryLand(lat, lon)
+
+  if (effectiveLand) {
+    return {
+      status: 'land',
+      isValid: false,
+      temperature: null,
+      salinity: null,
+      density: null,
+      currentU: null,
+      currentV: null,
+      currentSpeed: null,
+      depth_m,
+      seabed_depth_m: 0,
+      is_land: true,
+      lat,
+      lon,
+    }
+  }
+
+  // If local seabed is known and depth is beneath it
+  if (seabedDepth_m !== undefined && depth_m > seabedDepth_m) {
+    return {
+      status: 'below_seabed',
+      isValid: false,
+      temperature: null,
+      salinity: null,
+      density: null,
+      currentU: null,
+      currentV: null,
+      currentSpeed: null,
+      depth_m,
+      seabed_depth_m: seabedDepth_m,
+      is_land: false,
+      lat,
+      lon,
+    }
+  }
+
+  const { meta, temperature, salinity, density, currentsU, currentsV } = subgrid
+  const [, nTLat, nTLon] = meta.t_shape
+  const [, nCLat, nCLon] = meta.c_shape
+
+  const temp = interpolateValidNeighbors(
+    temperature, depthLevelIndex, nTLat, nTLon,
+    meta.t_lats, meta.t_lons, lat, lon, meta.fill_value
+  )
+  const sal = interpolateValidNeighbors(
+    salinity, depthLevelIndex, nTLat, nTLon,
+    meta.t_lats, meta.t_lons, lat, lon, meta.fill_value
+  )
+  const dens = interpolateValidNeighbors(
+    density, depthLevelIndex, nTLat, nTLon,
+    meta.t_lats, meta.t_lons, lat, lon, meta.fill_value
+  )
+  const u = interpolateValidNeighbors(
+    currentsU, depthLevelIndex, nCLat, nCLon,
+    meta.c_lats, meta.c_lons, lat, lon, meta.fill_value
+  )
+  const v = interpolateValidNeighbors(
+    currentsV, depthLevelIndex, nCLat, nCLon,
+    meta.c_lats, meta.c_lons, lat, lon, meta.fill_value
+  )
+
+  if (temp === null && sal === null) {
+    return {
+      status: 'no_data',
+      isValid: false,
+      temperature: null,
+      salinity: null,
+      density: null,
+      currentU: null,
+      currentV: null,
+      currentSpeed: null,
+      depth_m,
+      seabed_depth_m: seabedDepth_m ?? null,
+      is_land: false,
+      lat,
+      lon,
+    }
+  }
+
+  const speed = (u !== null && v !== null) ? Math.hypot(u, v) : null
+
+  return {
+    status: 'valid',
+    isValid: true,
+    temperature: temp !== null ? Math.round(temp * 100) / 100 : null,
+    salinity: sal !== null ? Math.round(sal * 100) / 100 : null,
+    density: dens !== null ? Math.round(dens * 100) / 100 : null,
+    currentU: u !== null ? Math.round(u * 1000) / 1000 : null,
+    currentV: v !== null ? Math.round(v * 1000) / 1000 : null,
+    currentSpeed: speed !== null ? Math.round(speed * 1000) / 1000 : null,
+    depth_m,
+    seabed_depth_m: seabedDepth_m ?? null,
+    is_land: false,
+    lat,
+    lon,
+  }
+}
+
+export interface GodasFullProfile {
+  temperatures: number[]
+  salinities: number[]
+  densities: number[]
+  currentSpeeds: number[]
+  depths_m: readonly number[]
+}
+
+/**
+ * Extracts a complete 16-level vertical profile from real NOAA GODAS 3D data at (lat, lon).
+ */
+export function sampleGodasProfile(
+  subgrid: GodasSubgridData,
+  lat: number,
+  lon: number,
+  seabedDepth_m?: number,
+  isLand?: boolean
+): GodasFullProfile | null {
+  const effectiveLand = isLand ?? isDryLand(lat, lon)
+  if (effectiveLand) return null
+
+  const { meta, temperature, salinity, density, currentsU, currentsV } = subgrid
+  const [, nTLat, nTLon] = meta.t_shape
+  const [, nCLat, nCLon] = meta.c_shape
+
+  const temps: number[] = []
+  const sals: number[] = []
+  const dens: number[] = []
+  const speeds: number[] = []
+
+  for (let k = 0; k < 16; k++) {
+    const d_m = DEPTH_LEVELS[k]
+    if (seabedDepth_m !== undefined && d_m > (seabedDepth_m + 30)) {
+      if (temps.length > 0) {
+        temps.push(temps[temps.length - 1])
+        sals.push(sals[sals.length - 1])
+        dens.push(dens[dens.length - 1])
+        speeds.push(0)
+      } else {
+        temps.push(2.0)
+        sals.push(34.7)
+        dens.push(1027.8)
+        speeds.push(0)
+      }
+      continue
+    }
+
+    const t = interpolateValidNeighbors(temperature, k, nTLat, nTLon, meta.t_lats, meta.t_lons, lat, lon, meta.fill_value)
+    const s = interpolateValidNeighbors(salinity, k, nTLat, nTLon, meta.t_lats, meta.t_lons, lat, lon, meta.fill_value)
+    const d = interpolateValidNeighbors(density, k, nTLat, nTLon, meta.t_lats, meta.t_lons, lat, lon, meta.fill_value)
+    const u = interpolateValidNeighbors(currentsU, k, nCLat, nCLon, meta.c_lats, meta.c_lons, lat, lon, meta.fill_value)
+    const v = interpolateValidNeighbors(currentsV, k, nCLat, nCLon, meta.c_lats, meta.c_lons, lat, lon, meta.fill_value)
+
+    temps.push(t !== null ? Math.round(t * 100) / 100 : (temps.length ? temps[temps.length - 1] : 28.0))
+    sals.push(s !== null ? Math.round(s * 100) / 100 : (sals.length ? sals[sals.length - 1] : 35.0))
+    dens.push(d !== null ? Math.round(d * 100) / 100 : (dens.length ? dens[dens.length - 1] : 1024.0))
+    speeds.push((u !== null && v !== null) ? Math.round(Math.hypot(u, v) * 1000) / 1000 : 0)
+  }
+
+  return {
+    temperatures: temps,
+    salinities: sals,
+    densities: dens,
+    currentSpeeds: speeds,
+    depths_m: DEPTH_LEVELS,
+  }
+}
 

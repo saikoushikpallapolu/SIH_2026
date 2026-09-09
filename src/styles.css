@@ -141,6 +141,12 @@ button {
   box-shadow: 0 0 12px rgba(0, 242, 254, 0.25);
 }
 
+.nav-center button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;

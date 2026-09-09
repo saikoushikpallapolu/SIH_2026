@@ -27,7 +27,7 @@ export default function GlobeAreaSelector({
   hoverCorner,
   isSelecting,
 }: GlobeAreaSelectorProps) {
-  // Determine current active box bounds: either from finalized boundary or in-progress drag
+  // Determine current active box bounds: prioritize in-progress drawing over existing activeBoundary
   const currentBounds = useMemo<{
     minLat: number
     maxLat: number
@@ -36,17 +36,6 @@ export default function GlobeAreaSelector({
     widthKm: number
     heightKm: number
   } | null>(() => {
-    if (activeBoundary) {
-      const [minLat, maxLat, minLon, maxLon] = activeBoundary.bbox
-      return {
-        minLat,
-        maxLat,
-        minLon,
-        maxLon,
-        widthKm: activeBoundary.width_km,
-        heightKm: activeBoundary.height_km,
-      }
-    }
     if (anchorCorner && hoverCorner) {
       const minLat = Math.min(anchorCorner.latitude, hoverCorner.latitude)
       const maxLat = Math.max(anchorCorner.latitude, hoverCorner.latitude)
@@ -57,6 +46,17 @@ export default function GlobeAreaSelector({
       const widthKm = haversineDistanceKm(centerLat, minLon, centerLat, maxLon)
       const heightKm = haversineDistanceKm(minLat, centerLon, maxLat, centerLon)
       return { minLat, maxLat, minLon, maxLon, widthKm, heightKm }
+    }
+    if (activeBoundary && !anchorCorner) {
+      const [minLat, maxLat, minLon, maxLon] = activeBoundary.bbox
+      return {
+        minLat,
+        maxLat,
+        minLon,
+        maxLon,
+        widthKm: activeBoundary.width_km,
+        heightKm: activeBoundary.height_km,
+      }
     }
     return null
   }, [activeBoundary, anchorCorner, hoverCorner])
@@ -110,11 +110,11 @@ export default function GlobeAreaSelector({
 
   // Anchor reticle if only first corner is placed
   const singleAnchorPos = useMemo(() => {
-    if (anchorCorner && !hoverCorner && !activeBoundary) {
+    if (anchorCorner && !hoverCorner) {
       return latLngToVector3(anchorCorner.latitude, anchorCorner.longitude, RADIUS + 0.02)
     }
     return null
-  }, [anchorCorner, hoverCorner, activeBoundary])
+  }, [anchorCorner, hoverCorner])
 
   return (
     <group>

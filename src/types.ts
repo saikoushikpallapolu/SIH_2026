@@ -158,3 +158,56 @@ export interface OceanPointProfile {
   }
 }
 
+/**
+ * The 16 exact scientific depth levels (meters) of NOAA GODAS 3D reanalysis.
+ */
+export const DEPTH_LEVELS = [
+  5, 10, 25, 50, 75, 100, 150, 200,
+  300, 500, 750, 1000, 1500, 2000, 3000, 4000
+] as const
+
+export type DepthLevel = typeof DEPTH_LEVELS[number]
+
+export type SampleStatus = 'valid' | 'below_seabed' | 'land' | 'outside_domain' | 'no_data'
+
+export interface GodasSubgridMeta {
+  version: number
+  format: string
+  fill_value: number
+  date: string
+  depths: number[]
+  t_lats: number[]
+  t_lons: number[]
+  c_lats: number[]
+  c_lons: number[]
+  vars: string[]
+  t_shape: [number, number, number]
+  c_shape: [number, number, number]
+  units: Record<string, string>
+}
+
+export interface GodasSubgridData {
+  meta: GodasSubgridMeta
+  temperature: Float32Array
+  salinity: Float32Array
+  density: Float32Array
+  currentsU: Float32Array
+  currentsV: Float32Array
+}
+
+export interface GodasSampleResult {
+  status: SampleStatus
+  isValid: boolean
+  temperature: number | null
+  salinity: number | null
+  density: number | null
+  currentU: number | null
+  currentV: number | null
+  currentSpeed: number | null
+  depth_m: number
+  seabed_depth_m: number | null
+  is_land: boolean
+  lat: number
+  lon: number
+}
+

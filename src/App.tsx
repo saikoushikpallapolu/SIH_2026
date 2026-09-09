@@ -35,8 +35,10 @@ import {
   BENCHMARK_REGIONS,
   CURRENT_SYSTEMS,
   DEPTH_STOPS,
+  computeMarineBiomass,
   computeSpatialBoundary,
   getCompassHeading,
+  getRegionalDiveProfile,
   getTsunamiScenarioById,
   isDryLand,
   isPointInIndianOcean,
@@ -46,6 +48,9 @@ import {
   TSUNAMI_SCENARIOS,
   type OceanHotspot,
   type SubgridTelemetry,
+  timestampToMonthIndex,
+  monthIndexToTimestamp,
+  resolveDatasetTimestamp,
 } from './oceanDataEngine'
 import type { CoastalStation, CurrentSystem, Instrument, OceanVariable, Selection, SpatialBoundary, TsunamiScenario, ViewMode } from './types'
 
@@ -64,15 +69,19 @@ function boundaryContainsMarine(boundary: SpatialBoundary): boolean {
   return false
 }
 
-// Converts month index 0..299 into readable year/month
-function formatEpoch(monthIndex: number): string {
-  const year = 2000 + Math.floor(monthIndex / 12)
+// Converts canonical ISO date string (YYYY-MM-DD) or month index 0..299 into readable year/month
+function formatEpoch(timestampOrMonthIndex: string | number): string {
+  const mIndex =
+    typeof timestampOrMonthIndex === 'string'
+      ? timestampToMonthIndex(timestampOrMonthIndex)
+      : timestampOrMonthIndex
+  const year = 2000 + Math.floor(mIndex / 12)
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  const month = monthNames[monthIndex % 12]
+  const month = monthNames[mIndex % 12]
   let tag = ''
-  if (monthIndex === 59) tag = ' · 2004 Tsunami'
-  else if (monthIndex === 292) tag = ' · Heatwave'
-  else if (monthIndex === 294) tag = ' · Monsoon Peak'
+  if (mIndex === 59) tag = ' · 2004 Tsunami'
+  else if (mIndex === 292) tag = ' · Heatwave'
+  else if (mIndex === 294) tag = ' · Monsoon Peak'
   return `${month} ${year}${tag}`
 }
 
@@ -114,9 +123,12 @@ export default function App() {
         if (!isNaN(val)) return val
       }
     } catch {}
-    return 25
+    return 0 // Surface default: displays verified real NOAA OISST daily SST
   })
-  const [monthIndex, setMonthIndex] = useState<number>(292) // May 2024 pre-monsoon heatwave baseline
+  // Canonical Universal Time State (Single source of truth: ISO calendar date string YYYY-MM-DD)
+  const [selectedTimestamp, setSelectedTimestamp] = useState<string>('2024-05-01')
+  // Derived monthIndex (0..299) computed from canonical timestamp for backward compatibility
+  const monthIndex = useMemo(() => timestampToMonthIndex(selectedTimestamp), [selectedTimestamp])
   const [isPlaying, setIsPlaying] = useState<boolean>(true)
   const [selection, setSelection] = useState<Selection>({ latitude: 3.316, longitude: 95.854 })
   const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
@@ -125,30 +137,23 @@ export default function App() {
   const [telemetry, setTelemetry] = useState<SubgridTelemetry | null>(null)
   const [profileOpen, setProfileOpen] = useState<boolean>(false)
   const [zenMode, setZenMode] = useState<boolean>(false)
-  const [diveTelemetry, setDiveTelemetry] = useState<DiveTelemetry | {
-    depth: number
-    temperature: number
-    salinity?: number
-    chlorophyll?: number
-    currentSpeed?: number
-    biomass?: {
-      primary_productivity_mg_c: number
-      fish_density_index: number
-      school_activity: 'Calm' | 'Active Foraging' | 'Swarming Baitball' | 'Feeding Frenzy'
-      estimated_fish_count: number
-    }
-  }>({
+  const [diveTelemetry, setDiveTelemetry] = useState<DiveTelemetry>({
     depth: 24,
+    depthLevelIndex: 2,
     temperature: 28.5,
     salinity: 35.2,
+    density: 1024.1,
     chlorophyll: 1.85,
     currentSpeed: 0.45,
-    biomass: {
-      primary_productivity_mg_c: 888.0,
-      fish_density_index: 85,
-      school_activity: 'Feeding Frenzy',
-      estimated_fish_count: 820,
-    }
+    currentU: 0.35,
+    currentV: 0.18,
+    temperatureProfile: [28.5, 28.2, 27.8, 26.5, 24.0, 20.5, 16.2, 12.0, 8.5, 5.2, 3.8, 2.5, 2.0, 1.8, 1.5, 1.2],
+    biomass: computeMarineBiomass(1.85, 24),
+    regionalProfile: getRegionalDiveProfile(12.5, 68.3, 292),
+    status: 'valid',
+    seabedDepth: 2500,
+    isRealData: false,
+    dataSource: 'Initializing...',
   })
   const [hotspotsOpen, setHotspotsOpen] = useState<boolean>(false)
   const [selectedHotspotCategory, setSelectedHotspotCategory] = useState<string>('all')
@@ -190,16 +195,46 @@ export default function App() {
   const [selectedStation, setSelectedStation] = useState<CoastalStation | null>(null)
 
   // Regional Deep Dive & Interactive Bounding Box Selection State (100% Area Selection)
+  const [isSelectingArea, setIsSelectingArea] = useState<boolean>(false)
   const [activeBoundary, setActiveBoundary] = useState<SpatialBoundary | null>(null)
   const [anchorCorner, setAnchorCorner] = useState<{ latitude: number; longitude: number } | null>(null)
   const [hoverCorner, setHoverCorner] = useState<{ latitude: number; longitude: number } | null>(null)
 
+  // Escape key cancels in-progress area selection without clearing activeBoundary
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isSelectingArea) {
+        setIsSelectingArea(false)
+        setAnchorCorner(null)
+        setHoverCorner(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isSelectingArea])
+
+  const handleToggleAreaSelection = () => {
+    if (isSelectingArea) {
+      // Cancelling selection: clear only anchorCorner and hoverCorner, preserve activeBoundary
+      setIsSelectingArea(false)
+      setAnchorCorner(null)
+      setHoverCorner(null)
+    } else {
+      // Entering selection mode: clear in-progress anchors, preserve activeBoundary
+      setIsSelectingArea(true)
+      setAnchorCorner(null)
+      setHoverCorner(null)
+    }
+  }
+
   const handleAreaCornerSelect = (coord: { latitude: number; longitude: number }) => {
+    if (!isSelectingArea) return
+
     if (!anchorCorner) {
-      // First click: drop Corner A and reset any previous boundary
+      // First click: drop Corner A with reticle
+      // Rule: Do NOT clear existing activeBoundary here!
       setAnchorCorner(coord)
-      setHoverCorner(coord)
-      setActiveBoundary(null)
+      setHoverCorner(null)
     } else {
       // Second click: lock bounding box
       const minLat = Math.min(anchorCorner.latitude, coord.latitude)
@@ -207,10 +242,8 @@ export default function App() {
       const minLon = Math.min(anchorCorner.longitude, coord.longitude)
       const maxLon = Math.max(anchorCorner.longitude, coord.longitude)
 
-      // Guard against accidental double click at exact same spot
+      // Guard against accidental double click at exact same spot (<0.2 deg)
       if (Math.abs(maxLat - minLat) < 0.2 && Math.abs(maxLon - minLon) < 0.2) {
-        setAnchorCorner(coord)
-        setHoverCorner(coord)
         return
       }
 
@@ -219,15 +252,17 @@ export default function App() {
         { latitude: maxLat, longitude: maxLon },
         `Selected Region (${minLat.toFixed(1)}°–${maxLat.toFixed(1)}°N, ${minLon.toFixed(1)}°–${maxLon.toFixed(1)}°E)`
       )
+      // Rule: Replace activeBoundary ONLY after valid second corner is completed
       setActiveBoundary(newBoundary)
       setAnchorCorner(null)
       setHoverCorner(null)
+      setIsSelectingArea(false)
       setSelection({ latitude: newBoundary.center[0], longitude: newBoundary.center[1] })
     }
   }
 
   const handleAreaHover = (coord: { latitude: number; longitude: number }) => {
-    if (anchorCorner) {
+    if (isSelectingArea && anchorCorner) {
       setHoverCorner(coord)
     }
   }
@@ -236,6 +271,7 @@ export default function App() {
     setActiveBoundary(regionBoundary)
     setAnchorCorner(null)
     setHoverCorner(null)
+    setIsSelectingArea(false)
     setSelection({ latitude: regionBoundary.center[0], longitude: regionBoundary.center[1] })
     setTeleportNonce(Date.now())
   }
@@ -251,11 +287,19 @@ export default function App() {
     }
   }, [selection, depth, monthIndex])
 
-  // Playback timer for 25-year time steps (Explore mode)
+  // Universal playback timer: steps canonical date month-by-month; stops cleanly at end of series
   useEffect(() => {
     if (!isPlaying || mode === 'tsunami') return
     const timer = window.setInterval(() => {
-      setMonthIndex((prev) => (prev + 1) % 300)
+      setSelectedTimestamp((curr) => {
+        const currIndex = timestampToMonthIndex(curr)
+        // If reached end of valid dataset range (month index 299 = 2024-12), halt cleanly without wrapping
+        if (currIndex >= 299) {
+          setIsPlaying(false)
+          return curr
+        }
+        return monthIndexToTimestamp(currIndex + 1)
+      })
     }, 1200)
     return () => window.clearInterval(timer)
   }, [isPlaying, mode])
@@ -378,7 +422,8 @@ export default function App() {
             variable={variable}
             selection={isInsideIndianOcean ? selection : { latitude: 12.5, longitude: 68.3 }}
             boundary={diveBoundary}
-            timeIndex={Math.floor(monthIndex / 50)}
+            timestamp={selectedTimestamp}
+            timeIndex={monthIndex}
             onTelemetry={(tel) => {
               setDiveTelemetry(tel)
             }}
@@ -388,6 +433,7 @@ export default function App() {
           <GlobeScene
             variable={variable}
             depth={depth}
+            timestamp={selectedTimestamp}
             timeIndex={monthIndex}
             mode={mode}
             overlayStrength={0.78}
@@ -404,6 +450,7 @@ export default function App() {
             tsunamiHour={tsunamiHour}
             tsunamiScenario={activeScenario}
             selectedStation={selectedStation}
+            isSelectingArea={isSelectingArea}
             activeBoundary={activeBoundary}
             anchorCorner={anchorCorner}
             hoverCorner={hoverCorner}
@@ -453,12 +500,18 @@ export default function App() {
               <Radio size={14} /> Tsunami Visualisation
             </button>
             <button
-              className={mode === 'dive' ? 'active' : ''}
+              className={`${mode === 'dive' ? 'active' : ''} ${!boundaryContainsMarine(diveBoundary) ? 'disabled-btn' : ''}`}
               onClick={() => {
+                if (!boundaryContainsMarine(diveBoundary)) return
                 setMode('dive')
                 setIsTsunamiPlaying(false)
               }}
-              title="Regional 3D Deep Dive (ETOPO Bathymetry, Coastline & CTD Telemetry)"
+              disabled={!boundaryContainsMarine(diveBoundary)}
+              title={
+                boundaryContainsMarine(diveBoundary)
+                  ? "Regional 3D Deep Dive (NOAA GODAS 3D & ETOPO Bathymetry)"
+                  : "Selected region is completely inland. Please select a marine or coastal region to dive."
+              }
             >
               <Compass size={14} /> 3D Deep Dive
             </button>
@@ -520,18 +573,29 @@ export default function App() {
       {/* 100% Area Selection Guidance & Benchmark Presets */}
       {!zenMode && (mode === 'explore' || mode === 'currents') && (
         <aside className="area-selector-toolbar glass">
+          <button
+            className={`draw-toggle-btn ${isSelectingArea ? 'active' : ''}`}
+            onClick={handleToggleAreaSelection}
+            title={isSelectingArea ? 'Cancel area selection (Esc)' : 'Draw geographic bounding box on globe'}
+          >
+            {isSelectingArea ? <X size={13} /> : <Crosshair size={13} />}
+            <span>{isSelectingArea ? 'Cancel' : 'Select Area'}</span>
+          </button>
+
           <div className="area-guide-tag">
             <Square size={13} color="#00f2fe" />
             <span className="draw-instructions">
               {anchorCorner
                 ? `✦ Corner A: (${anchorCorner.latitude.toFixed(1)}°, ${anchorCorner.longitude.toFixed(1)}°) — Click opposite corner to complete area`
+                : isSelectingArea
+                ? '✦ Area selection active — Click globe to set first corner (Esc to cancel)'
                 : activeBoundary
-                ? `✦ Region Selected (${activeBoundary.width_km} × ${activeBoundary.height_km} km) — Click globe anytime to select another area`
-                : '✦ Click two points on the globe to select any marine or coastal area'}
+                ? `✦ Region Selected (${activeBoundary.width_km} × ${activeBoundary.height_km} km) — Click 'Select Area' to draw a new region`
+                : '✦ Click \'Select Area\' to define a regional 3D bounding box'}
             </span>
           </div>
 
-          {(activeBoundary || anchorCorner) && (
+          {activeBoundary && !isSelectingArea && (
             <button
               className="benchmark-chip"
               onClick={() => {
@@ -561,7 +625,7 @@ export default function App() {
       )}
 
       {/* Floating Selected Region Action Card on Globe */}
-      {!zenMode && (mode === 'explore' || mode === 'currents') && activeBoundary && !anchorCorner && (
+      {!zenMode && (mode === 'explore' || mode === 'currents') && activeBoundary && !anchorCorner && !isSelectingArea && (
         <aside className="selected-region-card glass">
           <div className="selected-region-header">
             <span className="selected-region-title">
@@ -1038,11 +1102,27 @@ export default function App() {
       {!zenMode && mode === 'dive' && (
         <>
           <section className="dive-hud-clean glass">
-            <div className="dive-title">
-              <Compass size={13} />
-              <span>
-                {Math.abs(selection.latitude).toFixed(2)}°{selection.latitude >= 0 ? 'N' : 'S'} ·{' '}
-                {Math.abs(selection.longitude).toFixed(2)}°{selection.longitude >= 0 ? 'E' : 'W'}
+            <div className="dive-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Compass size={13} />
+                <span>
+                  {Math.abs(selection.latitude).toFixed(2)}°{selection.latitude >= 0 ? 'N' : 'S'} ·{' '}
+                  {Math.abs(selection.longitude).toFixed(2)}°{selection.longitude >= 0 ? 'E' : 'W'}
+                </span>
+              </div>
+              <span
+                style={{
+                  fontSize: '0.68em',
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  padding: '2px 7px',
+                  borderRadius: '4px',
+                  background: diveTelemetry.isRealData ? 'rgba(16, 185, 129, 0.18)' : 'rgba(56, 189, 248, 0.18)',
+                  color: diveTelemetry.isRealData ? '#10b981' : '#38bdf8',
+                  border: `1px solid ${diveTelemetry.isRealData ? 'rgba(16, 185, 129, 0.4)' : 'rgba(56, 189, 248, 0.4)'}`,
+                }}
+              >
+                {diveTelemetry.isRealData ? '● NOAA GODAS 3D' : '● DIGITAL TWIN'}
               </span>
             </div>
             <div className="dive-depth-big">
@@ -1061,18 +1141,42 @@ export default function App() {
             <div className="dive-hud-metrics-row">
               <div className="dive-chip">
                 <span>TEMP</span>
-                <b>{diveTelemetry.temperature.toFixed(1)}°C</b>
+                {diveTelemetry.temperature !== null ? (
+                  <b>{diveTelemetry.temperature.toFixed(1)}°C</b>
+                ) : diveTelemetry.status === 'below_seabed' ? (
+                  <b style={{ color: '#f59e0b', fontSize: '0.85em' }}>SEABED</b>
+                ) : diveTelemetry.status === 'land' ? (
+                  <b style={{ color: '#ef4444', fontSize: '0.85em' }}>LAND</b>
+                ) : (
+                  <b style={{ color: '#94a3b8' }}>--</b>
+                )}
               </div>
               {diveTelemetry.salinity !== undefined && (
                 <div className="dive-chip">
                   <span>SALINITY</span>
-                  <b>{diveTelemetry.salinity.toFixed(1)} PSU</b>
+                  {diveTelemetry.salinity !== null ? (
+                    <b>{diveTelemetry.salinity.toFixed(1)} PSU</b>
+                  ) : (
+                    <b style={{ color: '#94a3b8' }}>--</b>
+                  )}
+                </div>
+              )}
+              {diveTelemetry.density !== undefined && diveTelemetry.density !== null && (
+                <div className="dive-chip">
+                  <span>DENSITY</span>
+                  <b>{diveTelemetry.density.toFixed(1)} kg/m³</b>
                 </div>
               )}
               {diveTelemetry.chlorophyll !== undefined && (
                 <div className="dive-chip chl">
                   <span>CHL-A</span>
                   <b>{diveTelemetry.chlorophyll.toFixed(2)} mg/m³</b>
+                </div>
+              )}
+              {diveTelemetry.seabedDepth !== undefined && diveTelemetry.seabedDepth !== null && (
+                <div className="dive-chip">
+                  <span>SEABED</span>
+                  <b>{Math.round(diveTelemetry.seabedDepth)}m</b>
                 </div>
               )}
             </div>
@@ -1091,7 +1195,7 @@ export default function App() {
             )}
           </section>
 
-          <div className="dive-controls-hint glass">
+          <div className="dive-controls-hint glass" style={{ bottom: '130px' }}>
             <Compass size={13} />
             <span>
               <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move · <kbd>↑</kbd>/<kbd>Space</kbd> Ascend into Air · <kbd>↓</kbd>/<kbd>C</kbd> Dive · Drag to Look 360° · <kbd>Shift</kbd> Turbo
@@ -1125,8 +1229,8 @@ export default function App() {
         </>
       )}
 
-      {/* Standard Floating Bottom Dock for Explore & Currents Mode */}
-      {!zenMode && mode !== 'tsunami' && mode !== 'dive' && (
+      {/* Standard Floating Bottom Dock for Explore, Currents & Dive Mode */}
+      {!zenMode && mode !== 'tsunami' && (
         <footer className="bottom-dock glass">
           <div className="dock-top-row">
             {/* Variable Pills */}
@@ -1222,13 +1326,13 @@ export default function App() {
 
             {/* Timeline Scrubber */}
             <div className="timeline-slider-wrap">
-              <span className="epoch-badge">{formatEpoch(monthIndex)}</span>
+              <span className="epoch-badge">{formatEpoch(selectedTimestamp)}</span>
               <input
                 type="range"
                 min="0"
                 max="299"
                 value={monthIndex}
-                onChange={(e) => setMonthIndex(Number(e.target.value))}
+                onChange={(e) => setSelectedTimestamp(monthIndexToTimestamp(Number(e.target.value)))}
                 title="Scrub across 25 years (2000 - 2024)"
               />
             </div>

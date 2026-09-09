@@ -15,7 +15,12 @@ import {
   OCEAN_HOTSPOTS,
   type OceanHotspot,
   fetchOceanDataSlice,
+  fetchOisstLandMask,
   onCurrentsGridUpdate,
+  timestampToMonthIndex,
+  fetchSstSlice,
+  isSstMonthAvailable,
+  fetchChlSlice,
 } from './oceanDataEngine'
 import type {
   CoastalStation,
@@ -387,6 +392,7 @@ function OceanShader({
   variable,
   depth,
   timeIndex,
+  timestamp,
   overlayStrength,
   tsunamiActive = false,
   tsunamiScenario = TSUNAMI_HISTORIC_DATA,
@@ -395,6 +401,7 @@ function OceanShader({
   variable: OceanVariable
   depth: number
   timeIndex: number
+  timestamp?: string
   overlayStrength: number
   tsunamiActive?: boolean
   tsunamiScenario?: TsunamiScenario
@@ -426,19 +433,6 @@ function OceanShader({
     waterMask.needsUpdate = true
   }, [earthMap, waterMask])
 
-  // Dynamic 2D WebGL DataTexture (421 lon x 309 lat) for the active dataset slice
-  const sliceTexture = useMemo(() => {
-    const initData = new Float32Array(421 * 309)
-    const tex = new THREE.DataTexture(initData, 421, 309, THREE.RedFormat, THREE.FloatType)
-    tex.minFilter = THREE.LinearFilter
-    tex.magFilter = THREE.LinearFilter
-    tex.wrapS = THREE.ClampToEdgeWrapping
-    tex.wrapT = THREE.ClampToEdgeWrapping
-    tex.generateMipmaps = false
-    tex.needsUpdate = true
-    return tex
-  }, [])
-
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -456,8 +450,31 @@ function OceanShader({
           uTsunamiActive: { value: tsunamiActive ? 1.0 : 0.0 },
           uTsunamiHour: { value: tsunamiHour },
           uTsunamiPropMap: { value: texSumatra },
-          uOceanDataSlice: { value: sliceTexture },
+          uOceanDataSlice: {
+            value: new THREE.DataTexture(new Float32Array(4), 2, 2, THREE.RedFormat, THREE.FloatType),
+          },
           uHasDataSlice: { value: 0.0 },
+          uOisstMask: {
+            value: new THREE.DataTexture(new Uint8Array([255]), 1, 1, THREE.RedFormat, THREE.UnsignedByteType),
+          },
+          uHasOisstMask: { value: 0.0 },
+          /**
+           * uSstState — SST data availability for the current timestep:
+           *   0.0 = loading / idle (neutral ocean, no synthetic SST)
+           *   1.0 = unavailable (outside 2020-2024 coverage, neutral ocean)
+           *   2.0 = available (real NOAA OISST v2.1 authoritative)
+           */
+          uSstState: { value: 0.0 },
+          /**
+           * uIsTempSurface — 1.0 when variable=temperature AND depth<=0.
+           * Used to gate the authoritative SST path.
+           */
+          uIsTempSurface: { value: 0.0 },
+          /**
+           * uChlIsReal — 1.0 when a real ESA OC-CCI chlorophyll slice is loaded.
+           * When 0.0 the shader uses the synthetic Gaussian chlorophyll baseline.
+           */
+          uChlIsReal: { value: 0.0 },
         },
         vertexShader: `
           varying vec2 vUv;
@@ -483,6 +500,14 @@ function OceanShader({
           uniform sampler2D uTsunamiPropMap;
           uniform sampler2D uOceanDataSlice;
           uniform float uHasDataSlice;
+          uniform sampler2D uOisstMask;
+          uniform float uHasOisstMask;
+          // SST state: 0=loading, 1=unavailable, 2=available (real OISST authoritative)
+          uniform float uSstState;
+          // 1.0 when variable=temperature AND depth<=0 (surface SST mode)
+          uniform float uIsTempSurface;
+          // 1.0 when real ESA OC-CCI chlorophyll slice is loaded (CCI lat is descending)
+          uniform float uChlIsReal;
           varying vec2 vUv;
           varying vec3 vNormal;
           varying vec3 vPosition;
@@ -574,11 +599,11 @@ function OceanShader({
               texture2D(uEarthMap, vUv + vec2(0.0, texel.y)).rgb +
               texture2D(uEarthMap, vUv - vec2(0.0, texel.y)).rgb
             ) * 0.25;
-            vec3 earth = clamp(earthRaw + (earthRaw - blurSample) * 1.25, 0.0, 1.0);
+            vec3 earth = clamp(earthRaw + (earthRaw - blurSample) * 0.5, 0.0, 1.0);
 
             // Sub-pixel screen-space antialiased shoreline
             float rawMask = texture2D(uWaterMask, vUv).r;
-            float fw = max(0.0008, fwidth(rawMask) * 1.2);
+            float fw = max(0.0004, fwidth(rawMask) * 1.0);
             float water = smoothstep(0.33 - fw, 0.33 + fw, rawMask);
 
             // ==========================================================
@@ -683,6 +708,11 @@ function OceanShader({
             float thermocline = 1.0 - exp(-uDepth / (200.0 + tropicality * 140.0));
 
             // --- 1. GLOBAL BASELINE FIELD (Outside Indian Ocean Basin) ---
+            //
+            // IMPORTANT: When uIsTempSurface == 1.0 (temperature at depth 0),
+            // the synthetic temperature is NOT used inside inOisstDomain.
+            // The authoritative OISST branch below overrides it completely.
+            // Outside inOisstDomain the synthetic remains the only available source.
             vec3 globalBaseColor = vec3(0.0);
             if (uVariable < 0.5) {
               float wave = sin(vPosition.x * 4.0 + uTime * 0.4) * 0.03;
@@ -748,32 +778,132 @@ function OceanShader({
               globalBaseColor = paletteSpeed(flowGlow) * 0.55;
             }
 
-            // Dynamic authentic 0.25-deg ocean data slice over Indian Ocean
-            if (uHasDataSlice > 0.5 && lat >= -44.875 && lat <= 32.0 && lon >= 20.125 && lon <= 124.875) {
-              float su = (lon - 20.125) / (124.875 - 20.125);
-              float sv = (lat - (-44.875)) / (32.0 - (-44.875));
+            // ================================================================
+            // AUTHORITATIVE REAL-DATA OVERLAY — Indian Ocean domain
+            // Coordinates: lon [20.125, 124.875], lat [-44.875, 31.875]
+            // (OISST 420×308 grid, 0.25° resolution, cell-centred)
+            // ================================================================
+            bool inOisstDomain = (lat >= -45.0 && lat <= 32.0 && lon >= 20.0 && lon <= 125.0);
+
+            // OISST UV mapping:
+            //   u: lon 20.125 → 124.875 spans 104.75°  (420 cells × 0.25° - 0.25°)
+            //   v: lat -44.875 → 31.875 spans 76.75°   (308 cells × 0.25° - 0.25°)
+            //   Cell centres, so we clamp to [0,1] with no half-cell bias needed here
+            //   because THREE.ClampToEdgeWrapping is set on the DataTexture.
+            float su = clamp((lon - 20.0) / 105.0, 0.0, 1.0);
+            float sv = clamp((lat + 45.0) / 77.0, 0.0, 1.0);
+
+            // Authoritative OISST land/ocean mask (0=land, 255=ocean → normalized 0..1)
+            float oisstOcean = 1.0;
+            if (inOisstDomain && uHasOisstMask > 0.5) {
+              oisstOcean = texture2D(uOisstMask, vec2(su, sv)).r;
+            }
+
+            // ------------------------------------------------------------------
+            // AUTHORITATIVE SST PATH (uIsTempSurface == 1.0)
+            // Real NOAA OISST v2.1 is the exclusive source for surface temperature
+            // pixels inside the Indian Ocean domain.
+            //
+            // States:
+            //   uSstState = 0.0 (loading)     → neutral deep-ocean blue
+            //   uSstState = 1.0 (unavailable)  → neutral deep-ocean blue (darker)
+            //   uSstState = 2.0 (available)    → real OISST color, no synthetic mixing
+            // ------------------------------------------------------------------
+            if (uIsTempSurface > 0.5 && inOisstDomain) {
+              // Neutral colors for non-data states (visually distinct from real SST)
+              vec3 loadingColor  = vec3(0.008, 0.055, 0.14);  // deep ocean blue (loading)
+              vec3 unavailColor  = vec3(0.012, 0.035, 0.095); // very dark navy (no coverage)
+
+              float edgeFadeSST = smoothstep(20.0, 23.5, lon) *
+                                  (1.0 - smoothstep(121.5, 125.0, lon)) *
+                                  smoothstep(-45.0, -41.5, lat) *
+                                  (1.0 - smoothstep(28.5, 32.0, lat));
+
+              if (uSstState < 0.5) {
+                // Loading: suppress synthetic SST, show neutral blue
+                globalBaseColor = mix(globalBaseColor, loadingColor, edgeFadeSST);
+              } else if (uSstState < 1.5) {
+                // Unavailable: outside 2020-2024 coverage, show dark neutral
+                globalBaseColor = mix(globalBaseColor, unavailColor, edgeFadeSST);
+              } else {
+                // Available: real OISST is authoritative — no synthetic temperature mixed in
+                float val = texture2D(uOceanDataSlice, vec2(su, sv)).r;
+                // val > -990.0: valid ocean observation (sentinel = -999.0)
+                // val > 0.5:    actual seawater temperature (eliminates near-zero noise)
+                if (val > 0.5 && oisstOcean > 0.5) {
+                  // NOAA OISST range in Indian Ocean: roughly 2°C (deep upwelling) to 34°C (NW Arabian Sea)
+                  float normT = clamp((val - 2.0) / 32.0, 0.0, 1.0);
+                  vec3 sstColor = paletteThermal(normT);
+                  // Authoritative: replace, do not blend with synthetic
+                  globalBaseColor = mix(globalBaseColor, sstColor, edgeFadeSST);
+                } else {
+                  // Sentinel / land pixel inside IO domain: show neutral
+                  globalBaseColor = mix(globalBaseColor, loadingColor, edgeFadeSST);
+                }
+              }
+            } else if (uHasDataSlice > 0.5 && inOisstDomain && uIsTempSurface < 0.5) {
+              // Non-SST variables (salinity, chlorophyll, currents) or subsurface temperature:
+              // Use the existing blended path from the 25-year cubes.
               float val = texture2D(uOceanDataSlice, vec2(su, sv)).r;
               if (val > -990.0) {
                 vec3 sliceColor = globalBaseColor;
+                bool isDataValid = false;
                 if (uVariable < 0.5) {
-                  float normT = clamp((val - 2.0) / 30.0, 0.0, 1.0);
-                  sliceColor = paletteThermal(normT);
-                } else if (uVariable < 1.5) {
-                  float normS = clamp((val - 31.0) / 6.0, 0.0, 1.0);
-                  sliceColor = paletteHaline(normS);
-                } else if (uVariable < 2.5) {
-                  // NASA MODIS Ocean Color Logarithmic Transfer Function (0.025 to 2.5 mg/m3)
+                  // Subsurface temperature from 25-year cube (depth > 0)
                   if (val > 0.01) {
-                    float normC = clamp((log(max(val, 0.025)) - (-3.68888)) / 4.60517, 0.0, 1.0);
-                    sliceColor = paletteAlga(normC);
+                    float normT = clamp((val - 2.0) / 30.0, 0.0, 1.0);
+                    sliceColor = paletteThermal(normT);
+                    isDataValid = true;
+                  }
+                } else if (uVariable < 1.5) {
+                  // Salinity: 30-37 PSU typical; cubes use 0.0 on land
+                  if (val > 10.0) {
+                    float normS = clamp((val - 31.0) / 6.0, 0.0, 1.0);
+                    sliceColor = paletteHaline(normS);
+                    isDataValid = true;
+                  }
+                } else if (uVariable < 2.5) {
+                  // Chlorophyll: real ESA OC-CCI when available, synthetic 25-yr cube fallback.
+                  // CCI grid: latitude descending (row 0 = 31.98°N), so invert v-coord.
+                  // CCI valid range: 0.018 to ~62 mg/m³; log-scale normalisation.
+                  float chlVal;
+                  bool chlValid = false;
+                  if (uChlIsReal > 0.5) {
+                    // Real CCI: flip v so that North (lat=32) maps to texture top (v=1)
+                    float sv_chl = 1.0 - sv;
+                    float chlRaw = texture2D(uOceanDataSlice, vec2(su, sv_chl)).r;
+                    // -999.0 = sentinel (land/missing); anything > 0 is valid
+                    if (chlRaw > 0.0) {
+                      // log10 scale: log(0.025) ≈ -3.689, log(40) ≈ 3.689 → span ≈ 7.378
+                      chlVal = clamp((log(chlRaw) - (-3.68888)) / 7.37776, 0.0, 1.0);
+                      chlValid = true;
+                    }
+                  } else {
+                    // Synthetic 25-yr cube (val already set, range 0.025 to 2.5 typical)
+                    if (val > 0.01) {
+                      chlVal = clamp((log(max(val, 0.025)) - (-3.68888)) / 4.60517, 0.0, 1.0);
+                      chlValid = true;
+                    }
+                  }
+                  if (chlValid) {
+                    sliceColor = paletteAlga(chlVal);
+                    isDataValid = true;
+                  }
+                } else {
+                  // Currents: speed magnitude (m/s) from real GODAS or 25-yr cube
+                  if (val >= 0.0) {
+                    float normSpd = clamp(val / 1.2, 0.0, 1.0);
+                    sliceColor = paletteSpeed(normSpd);
+                    isDataValid = true;
                   }
                 }
-                // Seamless hermite feathering at Indian Ocean data boundaries
-                float edgeFade = smoothstep(20.125, 23.5, lon) *
-                                 (1.0 - smoothstep(121.5, 124.875, lon)) *
-                                 smoothstep(-44.875, -41.5, lat) *
-                                 (1.0 - smoothstep(28.5, 32.0, lat));
-                globalBaseColor = mix(globalBaseColor, sliceColor, edgeFade);
+                if (isDataValid) {
+                  float edgeFade = smoothstep(20.0, 23.5, lon) *
+                                   (1.0 - smoothstep(121.5, 125.0, lon)) *
+                                   smoothstep(-45.0, -41.5, lat) *
+                                   (1.0 - smoothstep(28.5, 32.0, lat));
+                  globalBaseColor = mix(globalBaseColor, sliceColor, edgeFade);
+                }
               }
             }
 
@@ -788,24 +918,153 @@ function OceanShader({
             }
             vec3 litOcean = mix(earth, dataColor, uOverlayStrength);
 
+            // Authoritative land/ocean masking:
+            // In the Indian Ocean domain, the physical NOAA OISST mask takes precedence.
+            // When an inland/coastal coordinate is land according to OISST (oisstOcean < 0.5),
+            // water is strictly forced to 0.0 so that satellite earth imagery is preserved
+            // and the procedural thermal baseline is NEVER revealed over land (e.g. Rann of Kutch).
+            float finalWater = water;
+            if (uHasOisstMask > 0.5 && inOisstDomain) {
+              finalWater = (oisstOcean > 0.5) ? water : 0.0;
+            }
+
             // Clean land masking with zero color bleed
-            gl_FragColor = vec4(mix(earth * (0.50 + light * 0.50), litOcean, water), 1.0);
+            gl_FragColor = vec4(mix(earth * (0.50 + light * 0.50), litOcean, finalWater), 1.0);
           }
         `,
       }),
-    [variable, earthMap, waterMask, overlayStrength, sliceTexture]
+    [variable, earthMap, waterMask, overlayStrength]
   )
 
-  // Fetch real high-resolution 0.25-deg ocean data slice from binary cubes engine
+  // ─── SST (temperature, depth=0): authoritative three-state real OISST path ───
+  // This effect exclusively handles surface temperature via real NOAA OISST v2.1.
+  // It sets uSstState to 0 (loading), 1 (unavailable), or 2 (available).
+  // It NEVER silently displays synthetic temperature in the Indian Ocean domain.
   useEffect(() => {
+    if (variable !== 'temperature' || depth > 0) {
+      // Not in SST mode — keep uSstState at whatever it was; the non-SST effect handles data.
+      return
+    }
     let active = true
     const month = Math.max(0, Math.min(299, Math.round(timeIndex)))
-    fetchOceanDataSlice(variable, month, depth)
+
+    // Immediately signal loading state (prevents stale real-data or synthetic flash)
+    material.uniforms.uSstState.value = 0.0
+    material.uniforms.uHasDataSlice.value = 0.0
+
+    fetchSstSlice(month, timestamp).then((result) => {
+      if (!active) return
+
+      if (result.status === 'unavailable') {
+        // Outside 2020-2024: show neutral ocean, not synthetic SST
+        material.uniforms.uSstState.value = 1.0
+        material.uniforms.uHasDataSlice.value = 0.0
+        console.info(`[SST] Coverage unavailable: ${result.reason}`)
+        return
+      }
+
+      if (result.status === 'error') {
+        // Server/network error: stay at loading state (neutral ocean)
+        material.uniforms.uSstState.value = 0.0
+        material.uniforms.uHasDataSlice.value = 0.0
+        console.warn('[SST] Fetch error:', result.reason)
+        return
+      }
+
+      // status === 'available': upload real OISST DataTexture
+      const data = result.data
+      // Real OISST grid is always 420 × 308
+      const width = 420
+      const height = 308
+      const currentTex = material.uniforms.uOceanDataSlice.value as THREE.DataTexture | null
+
+      if (
+        currentTex &&
+        currentTex.image &&
+        currentTex.image.width === width &&
+        currentTex.image.height === height &&
+        currentTex.image.data
+      ) {
+        // Same grid dimensions: fast in-place update
+        ;(currentTex.image.data as Float32Array).set(data)
+        currentTex.needsUpdate = true
+      } else {
+        if (currentTex) currentTex.dispose()
+        const newTex = new THREE.DataTexture(
+          new Float32Array(data),
+          width,
+          height,
+          THREE.RedFormat,
+          THREE.FloatType
+        )
+        // NearestFilter prevents sentinel -999 bleed across coastlines;
+        // boundary infill in the backend already handles coastline cells.
+        newTex.minFilter = THREE.LinearFilter
+        newTex.magFilter = THREE.LinearFilter
+        newTex.wrapS = THREE.ClampToEdgeWrapping
+        newTex.wrapT = THREE.ClampToEdgeWrapping
+        newTex.generateMipmaps = false
+        newTex.needsUpdate = true
+        material.uniforms.uOceanDataSlice.value = newTex
+      }
+
+      material.uniforms.uHasDataSlice.value = 1.0
+      material.uniforms.uSstState.value = 2.0  // authoritative real OISST
+    })
+
+    return () => { active = false }
+  }, [variable, depth, timeIndex, timestamp, material])
+
+  // ─── Non-SST, non-CHL variables (salinity, currents) or subsurface T ───
+  // Uses 25-year synthetic cube. Does NOT affect uSstState or uChlIsReal.
+  useEffect(() => {
+    if (variable === 'temperature' && depth <= 0) {
+      // Handled by the authoritative SST effect above
+      return
+    }
+    if (variable === 'chlorophyll') {
+      // Handled by the authoritative CCI chlorophyll effect below
+      return
+    }
+    let active = true
+    const month = Math.max(0, Math.min(299, Math.round(timeIndex)))
+    fetchOceanDataSlice(variable, month, depth, timestamp)
       .then((data) => {
         if (!active || !data) return
-        const arr = sliceTexture.image.data as Float32Array
-        arr.set(data)
-        sliceTexture.needsUpdate = true
+        const width = data.length === 420 * 308 ? 420 : 421
+        const height = data.length === 420 * 308 ? 308 : 309
+        const currentTex = material.uniforms.uOceanDataSlice.value as THREE.DataTexture | null
+
+        if (
+          currentTex &&
+          currentTex.image &&
+          currentTex.image.width === width &&
+          currentTex.image.height === height &&
+          currentTex.image.data
+        ) {
+          // Same dimensions: fast buffer copy and subimage update
+          (currentTex.image.data as Float32Array).set(data)
+          currentTex.needsUpdate = true
+        } else {
+          // Dimensions changed (e.g. 420x308 <-> 421x309): reallocate texture cleanly
+          if (currentTex) {
+            currentTex.dispose()
+          }
+          const newTex = new THREE.DataTexture(
+            new Float32Array(data),
+            width,
+            height,
+            THREE.RedFormat,
+            THREE.FloatType
+          )
+          newTex.minFilter = THREE.LinearFilter
+          newTex.magFilter = THREE.LinearFilter
+          newTex.wrapS = THREE.ClampToEdgeWrapping
+          newTex.wrapT = THREE.ClampToEdgeWrapping
+          newTex.generateMipmaps = false
+          newTex.needsUpdate = true
+          material.uniforms.uOceanDataSlice.value = newTex
+        }
         material.uniforms.uHasDataSlice.value = 1.0
       })
       .catch((err) => {
@@ -814,7 +1073,102 @@ function OceanShader({
     return () => {
       active = false
     }
-  }, [variable, timeIndex, depth, sliceTexture, material])
+  }, [variable, timeIndex, depth, timestamp, material])
+
+  // Load authoritative static OISST 420x308 land/ocean mask once on mount
+  useEffect(() => {
+    let active = true
+    fetchOisstLandMask()
+      .then((maskBytes: Uint8Array | null) => {
+        if (!active || !maskBytes) return
+        const maskTex = new THREE.DataTexture(
+          maskBytes,
+          420,
+          308,
+          THREE.RedFormat,
+          THREE.UnsignedByteType
+        )
+        maskTex.minFilter = THREE.NearestFilter
+        maskTex.magFilter = THREE.NearestFilter
+        maskTex.wrapS = THREE.ClampToEdgeWrapping
+        maskTex.wrapT = THREE.ClampToEdgeWrapping
+        maskTex.generateMipmaps = false
+        maskTex.needsUpdate = true
+
+        material.uniforms.uOisstMask.value = maskTex
+        material.uniforms.uHasOisstMask.value = 1.0
+      })
+      .catch((err: unknown) => {
+        console.warn('OISST land mask load error:', err)
+      })
+    return () => {
+      active = false
+    }
+  }, [material])
+
+  // ─── Chlorophyll (authoritative ESA OC-CCI real data path) ───
+  // Fetches a 421×309 monthly chlorophyll slice from /api/real/chl/slice.
+  // CCI covers all 25-year cube months (2000-2024). When loaded, uChlIsReal=1.
+  useEffect(() => {
+    if (variable !== 'chlorophyll') {
+      // Not in chlorophyll mode: reset CCI state so uChlIsReal doesn't linger
+      material.uniforms.uChlIsReal.value = 0.0
+      return
+    }
+    let active = true
+    const month = Math.max(0, Math.min(299, Math.round(timeIndex)))
+
+    // Reset while loading (shows synthetic baseline in IO domain during transition)
+    material.uniforms.uChlIsReal.value = 0.0
+    material.uniforms.uHasDataSlice.value = 0.0
+
+    fetchChlSlice(month).then((result) => {
+      if (!active) return
+
+      if (result.status !== 'available') {
+        console.warn('[CHL] ESA CCI fetch:', result.status, (result as { reason?: string }).reason ?? '')
+        return
+      }
+
+      // CCI grid: 309 rows (lat desc) × 421 cols
+      const width = 421
+      const height = 309
+      const data = result.data
+      const currentTex = material.uniforms.uOceanDataSlice.value as THREE.DataTexture | null
+
+      if (
+        currentTex &&
+        currentTex.image &&
+        currentTex.image.width === width &&
+        currentTex.image.height === height &&
+        currentTex.image.data
+      ) {
+        ;(currentTex.image.data as Float32Array).set(data)
+        currentTex.needsUpdate = true
+      } else {
+        if (currentTex) currentTex.dispose()
+        const newTex = new THREE.DataTexture(
+          new Float32Array(data),
+          width,
+          height,
+          THREE.RedFormat,
+          THREE.FloatType
+        )
+        newTex.minFilter = THREE.LinearFilter
+        newTex.magFilter = THREE.LinearFilter
+        newTex.wrapS = THREE.ClampToEdgeWrapping
+        newTex.wrapT = THREE.ClampToEdgeWrapping
+        newTex.generateMipmaps = false
+        newTex.needsUpdate = true
+        material.uniforms.uOceanDataSlice.value = newTex
+      }
+
+      material.uniforms.uHasDataSlice.value = 1.0
+      material.uniforms.uChlIsReal.value = 1.0  // authoritative real ESA OC-CCI
+    })
+
+    return () => { active = false }
+  }, [variable, timeIndex, material])
 
   useFrame(({ clock }) => {
     material.uniforms.uTime.value = clock.getElapsedTime()
@@ -833,10 +1187,12 @@ function OceanShader({
   material.uniforms.uOverlayStrength.value = overlayStrength
   material.uniforms.uTsunamiActive.value = tsunamiActive ? 1.0 : 0.0
   material.uniforms.uTsunamiHour.value = tsunamiHour
+  // Drive the SST authoritative gate every frame (so it immediately reflects variable/depth changes)
+  material.uniforms.uIsTempSurface.value = (variable === 'temperature' && depth <= 0) ? 1.0 : 0.0
 
   return (
     <mesh material={material}>
-      <sphereGeometry args={[RADIUS, 128, 128]} />
+      <sphereGeometry args={[RADIUS, 192, 192]} />
     </mesh>
   )
 }
@@ -1394,7 +1750,8 @@ function CameraDirector({
 export interface GlobeSceneProps {
   variable: OceanVariable
   depth: number
-  timeIndex: number
+  timestamp?: string
+  timeIndex?: number
   mode: ViewMode
   overlayStrength: number
   instruments: Instrument[]
@@ -1462,6 +1819,7 @@ function IndianOceanSectorBoundary() {
 function Scene({
   variable,
   depth,
+  timestamp,
   timeIndex,
   mode,
   overlayStrength,
@@ -1490,16 +1848,18 @@ function Scene({
 }: GlobeSceneProps) {
   const groupRef = useRef<THREE.Group>(null)
 
+  const effectiveTimeIndex = timeIndex ?? (timestamp ? timestampToMonthIndex(timestamp) : 292)
+
   const handleGlobeClick = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation()
-    if (!groupRef.current || !onAreaCornerSelect) return
+    if (!isSelectingArea || !groupRef.current || !onAreaCornerSelect) return
     const localPoint = groupRef.current.worldToLocal(event.point.clone())
     const coord = vector3ToLatLng(localPoint)
     onAreaCornerSelect(coord)
   }
 
   const handleGlobePointerMove = (event: ThreeEvent<PointerEvent>) => {
-    if (!onAreaHover || !groupRef.current) return
+    if (!isSelectingArea || !anchorCorner || !onAreaHover || !groupRef.current) return
     const localPoint = groupRef.current.worldToLocal(event.point.clone())
     const coord = vector3ToLatLng(localPoint)
     onAreaHover(coord)
@@ -1526,7 +1886,8 @@ function Scene({
         <OceanShader
           variable={isTsunamiActive ? 'temperature' : (mode === 'currents' ? 'currents' : variable)}
           depth={depth}
-          timeIndex={timeIndex}
+          timeIndex={effectiveTimeIndex}
+          timestamp={timestamp}
           overlayStrength={isTsunamiActive ? 0.35 : overlayStrength}
           tsunamiActive={isTsunamiActive}
           tsunamiScenario={tsunamiScenario}
@@ -1541,14 +1902,16 @@ function Scene({
           isSelecting={isSelectingArea}
         />
 
-        {/* Invisible raycast sphere for clicks and precision hover */}
-        <mesh
-          onClick={handleGlobeClick}
-          onPointerMove={handleGlobePointerMove}
-        >
-          <sphereGeometry args={[RADIUS + 0.008, 96, 96]} />
-          <meshBasicMaterial transparent opacity={0} />
-        </mesh>
+        {/* Invisible raycast sphere for clicks and precision hover (only active during area selection) */}
+        {isSelectingArea && (
+          <mesh
+            onClick={handleGlobeClick}
+            onPointerMove={handleGlobePointerMove}
+          >
+            <sphereGeometry args={[RADIUS + 0.008, 96, 96]} />
+            <meshBasicMaterial transparent opacity={0} />
+          </mesh>
+        )}
 
         {/* Latitude circles */}
         {[-30, 0, 30].map((lat) => (
@@ -1569,7 +1932,7 @@ function Scene({
         <OceanCurrentFlow
           active={isCurrentsActive || mode === 'dive'}
           depth={depth}
-          timeIndex={timeIndex}
+          timeIndex={effectiveTimeIndex}
           showStreamlines={showStreamlines}
           showParticles={showParticles}
           flowIntensity={flowIntensity}
@@ -1580,7 +1943,7 @@ function Scene({
         {showVectorArrows && (
           <CurrentsVectorField
             active={isCurrentsActive && showVectorArrows}
-            timeIndex={timeIndex}
+            timeIndex={effectiveTimeIndex}
           />
         )}
 
@@ -1617,7 +1980,7 @@ function Scene({
         {/* Surface Fish Shoals over high-chlorophyll upwelling blooms */}
         <GlobeFishShoals
           active={mode === 'explore' && variable === 'chlorophyll'}
-          timeIndex={timeIndex}
+          timeIndex={effectiveTimeIndex}
         />
 
         {/* Holographic Sonar Beacon at clicked coordinate (hidden when boundary box is framing area) */}
@@ -1642,6 +2005,7 @@ function Scene({
         maxDistance={5.2}
         enableDamping
         dampingFactor={0.06}
+        enableRotate={!isSelectingArea}
         autoRotate={mode === 'explore' && !teleportNonce && !isSelectingArea && !activeBoundary && !anchorCorner}
         autoRotateSpeed={0.18}
       />

@@ -4,36 +4,74 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
   computeMarineBiomass,
+  DEPTH_LEVELS,
   extractClientIsolineSegments,
+  fetchGodasRegionalSubgrid,
   fetchTerrainSlice,
+  getAuthoritativeSeabedDepth,
   getChlorophyllAt,
   getRegionalDiveProfile,
   getSubgridLocalEstimate,
+  loadEtopoBathymetry,
   querySubgridTelemetry,
+  sampleGodasSubgrid,
+  sampleGodasProfile,
+  type GodasFullProfile,
+  type GodasSampleResult,
+  type GodasSubgridData,
   type MarineBiomassInfo,
   type RegionalDiveProfile,
+  type SampleStatus,
 } from './oceanDataEngine'
 import type { OceanVariable, Selection, SpatialBoundary, TerrainSliceData } from './types'
 
 export interface DiveTelemetry {
   depth: number
-  temperature: number
-  salinity: number
+  depthLevelIndex?: number
+  temperature: number | null
+  salinity: number | null
+  density?: number | null
   chlorophyll: number
   currentSpeed: number
   currentU: number
   currentV: number
   temperatureProfile: number[]
+  salinityProfile?: number[]
+  currentProfile?: number[]
   biomass: MarineBiomassInfo
   regionalProfile: RegionalDiveProfile
+  status?: SampleStatus
+  seabedDepth?: number | null
+  isRealData?: boolean
+  dataSource?: string
 }
 interface Props {
   variable: OceanVariable
   selection: Selection
   boundary?: SpatialBoundary
-  timeIndex: number
+  timestamp?: string
+  timeIndex?: number
   onTelemetry: (telemetry: DiveTelemetry) => void
   onExit?: () => void
+}
+
+/**
+ * Resolves the canonical calendar timestamp to an uncompressed 0..299 month index.
+ * Preserves true monthly synchronization without fractional loss or artificial scaling.
+ */
+function resolveDiveMonthIndex(timestamp?: string, fallbackTimeIndex?: number): number {
+  if (timestamp) {
+    const parts = timestamp.split('-')
+    const year = parseInt(parts[0], 10)
+    const month = parseInt(parts[1], 10)
+    if (!isNaN(year) && !isNaN(month)) {
+      return Math.max(0, Math.min(299, (year - 2000) * 12 + (month - 1)))
+    }
+  }
+  if (fallbackTimeIndex !== undefined) {
+    return Math.max(0, Math.min(299, Math.round(fallbackTimeIndex)))
+  }
+  return 292 // Default May 2024
 }
 
 const worldLimit = 120
@@ -71,14 +109,20 @@ function Terrain({
   selection,
   boundary,
   currents,
+  terrainData: initialTerrainData,
 }: {
   selection: Selection
   boundary?: SpatialBoundary
   currents?: { u: number; v: number; speed: number }
+  terrainData?: TerrainSliceData | null
 }) {
-  const [terrainData, setTerrainData] = useState<TerrainSliceData | null>(null)
+  const [terrainData, setTerrainData] = useState<TerrainSliceData | null>(initialTerrainData ?? null)
 
   useEffect(() => {
+    if (initialTerrainData) {
+      setTerrainData(initialTerrainData)
+      return
+    }
     let active = true
     const bbox: [number, number, number, number] = boundary
       ? boundary.bbox
@@ -100,7 +144,7 @@ function Terrain({
     return () => {
       active = false
     }
-  }, [boundary, selection.latitude, selection.longitude])
+  }, [boundary, selection.latitude, selection.longitude, initialTerrainData])
 
   const { terrainGeometry, skirtGeometry, coastlineGeom, contourGeom } = useMemo(() => {
     const size = 260
@@ -348,28 +392,34 @@ function Terrain({
           void main() {
             vec3 N = normalize(vNormalWorld);
             vec3 L = normalize(vec3(0.35, 0.88, 0.38));
-            float NdotL = max(0.20, dot(N, L));
-            vec3 baseColor = vColor * (0.52 + NdotL * 0.65);
+            float NdotL = max(0.0, dot(N, L));
 
-            // Animated sun caustics dancing across the shallow and shelf ocean bed
+            // Depth light extinction: sunlight dies out rapidly below 35-50m
+            float depth = max(0.0, -vElevation);
+            float sunExtinction = exp(-depth / 38.0);
+            
+            // Ambient light: dim in abyss, warm in shallows
+            vec3 ambient = vColor * mix(vec3(0.03, 0.06, 0.10), vec3(0.55, 0.65, 0.70), sunExtinction);
+            vec3 diffuse = vColor * vec3(1.0, 0.95, 0.85) * NdotL * sunExtinction * 1.6;
+            vec3 baseColor = ambient + diffuse;
+
+            // Animated sun caustics dancing ONLY across the shallow ocean bed (< 35m)
             if (vElevation < 0.0) {
-              float depth = -vElevation;
-              float causticFade = clamp(1.0 - depth / 340.0, 0.0, 1.0);
+              float causticFade = clamp(1.0 - depth / 35.0, 0.0, 1.0);
               if (causticFade > 0.01) {
                 vec2 dir = length(uCurrentDir) > 0.01 ? normalize(uCurrentDir) : vec2(0.85, 0.35);
                 vec2 cUv = vWorldPos.xz * 0.32 + dir * time * 0.42;
                 float c1 = causticNoise(cUv * 3.4);
                 float c2 = causticNoise(cUv * 6.8 - dir * time * 0.25);
                 float caustic = pow(c1 * 0.6 + c2 * 0.4, 2.2) * 2.6;
-                // Warm sunlit caustics on sand
                 baseColor += vec3(0.55, 0.88, 0.95) * caustic * causticFade * max(0.0, N.y);
               }
             }
 
             // Distance fog to blend into the horizon
             float dist = length(cameraPosition - vWorldPos);
-            float fogFactor = smoothstep(55.0, 360.0, dist);
-            vec3 fogColor = vec3(0.01, 0.08, 0.15);
+            float fogFactor = smoothstep(18.0, 160.0, dist);
+            vec3 fogColor = mix(vec3(0.01, 0.04, 0.08), vec3(0.02, 0.16, 0.26), sunExtinction);
             gl_FragColor = vec4(mix(baseColor, fogColor, fogFactor), 1.0);
           }
         `,
@@ -589,20 +639,58 @@ function OceanSurface({
   )
 }
 
-function WaterParticles() {
+function WaterParticles({
+  currents = { u: 0.35, v: 0.18, speed: 0.42 },
+}: {
+  currents?: { u: number; v: number; speed: number }
+}) {
   const ref = useRef<THREE.Points>(null)
-  const positions = useMemo(() => {
-    const data = new Float32Array(800 * 3)
-    for (let i = 0; i < 800; i += 1) {
-      data[i * 3] = ((i * 37) % 220) - 110
-      data[i * 3 + 1] = -0.5 - ((i * 73) % 25)
-      data[i * 3 + 2] = ((i * 97) % 220) - 110
+  const { camera } = useThree()
+  const count = 900
+  const [positions, offsets] = useMemo(() => {
+    const data = new Float32Array(count * 3)
+    const off = new Float32Array(count * 3)
+    for (let i = 0; i < count; i += 1) {
+      const x = ((i * 37) % 180) - 90
+      const y = ((i * 73) % 60) - 30
+      const z = ((i * 97) % 180) - 90
+      data[i * 3] = x
+      data[i * 3 + 1] = y
+      data[i * 3 + 2] = z
+      off[i * 3] = x
+      off[i * 3 + 1] = y
+      off[i * 3 + 2] = z
     }
-    return data
+    return [data, off]
   }, [])
 
   useFrame(({ clock }) => {
-    if (ref.current) ref.current.position.y = Math.sin(clock.getElapsedTime() * 0.12) * 0.4
+    if (!ref.current) return
+    const t = clock.getElapsedTime()
+    const spd = Math.max(0.2, Math.min(2.5, currents.speed * 2.8))
+    const dirX = currents.u
+    const dirZ = currents.v
+    const camX = camera.position.x
+    const camY = camera.position.y
+    const camZ = camera.position.z
+    const posAttr = ref.current.geometry.attributes.position as THREE.BufferAttribute
+    const array = posAttr.array as Float32Array
+
+    for (let i = 0; i < count; i++) {
+      const i3 = i * 3
+      // Drift along real current velocity vector with dynamic camera-centered wrapping
+      let rx = offsets[i3] + dirX * t * spd * 3.5
+      let rz = offsets[i3 + 2] + dirZ * t * spd * 3.5
+      rx = (((rx % 180) + 180) % 180) - 90
+      rz = (((rz % 180) + 180) % 180) - 90
+      let ry = offsets[i3 + 1] + Math.sin(t * 0.35 + i) * 0.4
+      ry = (((ry % 60) + 60) % 60) - 30
+
+      array[i3] = camX + rx
+      array[i3 + 1] = Math.min(-0.4, camY + ry)
+      array[i3 + 2] = camZ + rz
+    }
+    posAttr.needsUpdate = true
   })
 
   return (
@@ -611,11 +699,11 @@ function WaterParticles() {
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
       <pointsMaterial
-        color="#9beeff"
-        size={0.10}
+        color="#a5f3fc"
+        size={0.16}
         sizeAttenuation
         transparent
-        opacity={0.38}
+        opacity={0.55}
         depthWrite={false}
       />
     </points>
@@ -674,16 +762,18 @@ const TOTAL_MAX_FISH = 1500
  */
 function FishSchools({
   chlorophyll,
+  depth = 0,
   diverPositionRef,
 }: {
   chlorophyll: number
+  depth?: number
   diverPositionRef?: React.RefObject<THREE.Vector3>
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const fishGeom = useMemo(() => createFishGeometry(), [])
   
-  // Calculate dynamic active fish count and behavior based on local chlorophyll
-  const biomass = useMemo(() => computeMarineBiomass(chlorophyll), [chlorophyll])
+  // Calculate dynamic active fish count and behavior based on local chlorophyll and depth
+  const biomass = useMemo(() => computeMarineBiomass(chlorophyll, depth), [chlorophyll, depth])
   const activeCount = Math.min(TOTAL_MAX_FISH, biomass.estimated_fish_count)
   const isBaitball = biomass.school_activity === 'Swarming Baitball' || biomass.school_activity === 'Feeding Frenzy'
   const prevCountRef = useRef(0)
@@ -879,7 +969,13 @@ const BLOOM_PARTICLE_COUNT = 450
  * High-Performance GPU-Driven Phytoplankton Micro-Algae Bloom Motes.
  * Movement and scattering are 100% computed in GPU vertex shaders with zero CPU buffer transfer.
  */
-function PhytoplanktonBloom({ chlorophyll }: { chlorophyll: number }) {
+function PhytoplanktonBloom({
+  chlorophyll,
+  depth = 0,
+}: {
+  chlorophyll: number
+  depth?: number
+}) {
   const pointsRef = useRef<THREE.Points>(null)
 
   const [positions, scales, phases] = useMemo(() => {
@@ -888,8 +984,8 @@ function PhytoplanktonBloom({ chlorophyll }: { chlorophyll: number }) {
     const ph = new Float32Array(BLOOM_PARTICLE_COUNT)
     for (let i = 0; i < BLOOM_PARTICLE_COUNT; i++) {
       pos[i * 3 + 0] = (Math.random() - 0.5) * 110
-      // Submerged in water column beneath sea level
-      pos[i * 3 + 1] = -22.0 + Math.random() * 21.0
+      // Submerged in photic layer beneath sea level
+      pos[i * 3 + 1] = -24.0 + Math.random() * 23.0
       pos[i * 3 + 2] = (Math.random() - 0.5) * 110
       sc[i] = 0.5 + Math.random() * 1.2
       ph[i] = Math.random() * Math.PI * 2.0
@@ -903,6 +999,17 @@ function PhytoplanktonBloom({ chlorophyll }: { chlorophyll: number }) {
     return new THREE.Color('#a7f3d0')
   }, [chlorophyll])
 
+  // Depth attenuation for phytoplankton (algae lives in photic zone < 120m)
+  const depthFactor = useMemo(() => {
+    if (depth <= 40) return 1.0
+    return Math.max(0.0, Math.exp(-(depth - 40) / 75.0))
+  }, [depth])
+
+  const targetOpacity = useMemo(() => {
+    const base = chlorophyll > 1.0 ? 0.85 : 0.45
+    return base * depthFactor
+  }, [chlorophyll, depthFactor])
+
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -913,7 +1020,7 @@ function PhytoplanktonBloom({ chlorophyll }: { chlorophyll: number }) {
           uTime: { value: 0 },
           uChl: { value: chlorophyll },
           uColor: { value: bloomColor },
-          uOpacity: { value: chlorophyll > 1.0 ? 0.85 : 0.45 },
+          uOpacity: { value: targetOpacity },
         },
         vertexShader: `
           uniform float uTime;
@@ -942,12 +1049,13 @@ function PhytoplanktonBloom({ chlorophyll }: { chlorophyll: number }) {
           }
         `,
       }),
-    [bloomColor, chlorophyll]
+    [bloomColor, chlorophyll, targetOpacity]
   )
 
   useFrame(({ clock }) => {
     material.uniforms.uTime.value = clock.getElapsedTime()
     material.uniforms.uChl.value = chlorophyll
+    material.uniforms.uOpacity.value = targetOpacity
   })
 
   return (
@@ -997,12 +1105,20 @@ function RegionalSeabedFeatures({ profile }: { profile: RegionalDiveProfile; sel
 
 function Diver({
   selection,
-  timeIndex,
+  boundary,
+  diveBbox,
+  terrainData,
+  godasSubgrid,
+  monthIndex,
   diverPosRef,
   onTelemetry,
 }: {
   selection: Selection
-  timeIndex: number
+  boundary?: SpatialBoundary
+  diveBbox: [number, number, number, number]
+  terrainData: TerrainSliceData | null
+  godasSubgrid: GodasSubgridData | null
+  monthIndex: number
   diverPosRef: React.RefObject<THREE.Vector3>
   onTelemetry: (telemetry: DiveTelemetry) => void
 }) {
@@ -1088,44 +1204,295 @@ function Diver({
     if (ascend) camera.position.y += speed * delta
     if (descend) camera.position.y -= speed * delta
 
+    // Geographic coordinate mapping across regional dive bounding box
+    const [minLat, maxLat, minLon, maxLon] = diveBbox
+    const size = 260
+    const uLon = THREE.MathUtils.clamp((camera.position.x + size / 2) / size, 0, 1)
+    const currentLon = minLon + uLon * (maxLon - minLon)
+    const vLat = THREE.MathUtils.clamp((size / 2 - camera.position.z) / size, 0, 1)
+    const currentLat = minLat + vLat * (maxLat - minLat)
+
+    // Authoritative seabed query using native ETOPO grid or regional terrain slice
+    const localSeabed = getAuthoritativeSeabedDepth(currentLat, currentLon, terrainData)
+    const seabedDepth_m = localSeabed.seabedDepth_m
+    const isLand = localSeabed.isLand
+
+    // Visual floor height in Three.js world units
+    const elevM = isLand ? localSeabed.elevation_m : -seabedDepth_m
+    const floorY = getElevationY(elevM)
+
     camera.position.x = THREE.MathUtils.clamp(camera.position.x, -worldLimit, worldLimit)
     camera.position.z = THREE.MathUtils.clamp(camera.position.z, -worldLimit, worldLimit)
-    // No surface ceiling! Camera can dive down to seabed (-32m) or ascend high into sky (+75m)
-    camera.position.y = THREE.MathUtils.clamp(camera.position.y, -32.0, 75.0)
+    // Dynamic vertical constraint: camera cannot penetrate beneath seabed bedrock
+    camera.position.y = THREE.MathUtils.clamp(camera.position.y, floorY + 1.2, 75.0)
 
     // Direct mutable reference update with ZERO React re-renders!
     if (diverPosRef.current) {
       diverPosRef.current.copy(camera.position)
     }
 
-    // Throttled smooth telemetry updates using fast synchronous subgrid engine
-    if (state.clock.elapsedTime - lastTelemetry.current > 0.35) {
+    // Throttled smooth telemetry updates using real GODAS 3D and high-res ETOPO bathymetry
+    if (state.clock.elapsedTime - lastTelemetry.current > 0.25) {
       lastTelemetry.current = state.clock.elapsedTime
-      const profile = getRegionalDiveProfile(selection.latitude, selection.longitude, timeIndex)
-      
-      // When underwater (y <= 0), compute depth in meters down to seabedDepth.
-      // When above water (y > 0), depth is 0 (aerial exploration).
-      const depth = camera.position.y <= 0
-        ? Math.round((-camera.position.y) * (profile.seabedDepth / 25.0))
-        : 0
+      const profile = getRegionalDiveProfile(currentLat, currentLon, monthIndex)
 
-      const localData = getSubgridLocalEstimate(selection.latitude, selection.longitude, depth, timeIndex * 25)
-      onTelemetry({
-        depth,
-        temperature: localData.temperature_c,
-        salinity: localData.salinity_psu,
-        chlorophyll: localData.chlorophyll_mg_m3,
-        currentSpeed: localData.current_speed_m_s,
-        currentU: localData.current_vector.u,
-        currentV: localData.current_vector.v,
-        temperatureProfile: localData.ctd_profile?.temperatures || [],
-        biomass: localData.marine_biomass || computeMarineBiomass(localData.chlorophyll_mg_m3, depth),
-        regionalProfile: profile,
-      })
+      // When underwater (y <= 0), compute depth in meters down to seabedDepth_m.
+      // When above water (y > 0), depth is 0 (aerial exploration).
+      let depth_m = 0
+      if (camera.position.y <= 0 && !isLand && seabedDepth_m > 0) {
+        const maxTravel = Math.max(0.5, -floorY)
+        const fraction = THREE.MathUtils.clamp(-camera.position.y / maxTravel, 0, 1)
+        depth_m = Math.min(seabedDepth_m, Math.round(fraction * seabedDepth_m))
+      }
+
+      // Map depth_m to standard 16-level GODAS depth index
+      let depthLevelIdx = 0
+      for (let i = 0; i < DEPTH_LEVELS.length; i++) {
+        if (depth_m >= DEPTH_LEVELS[i]) {
+          depthLevelIdx = i
+        } else {
+          break
+        }
+      }
+
+      // Sample real NOAA GODAS 3D subgrid
+      let sample: GodasSampleResult | null = null
+      let godasProfile: GodasFullProfile | null = null
+      if (godasSubgrid) {
+        sample = sampleGodasSubgrid(
+          godasSubgrid,
+          currentLat,
+          currentLon,
+          depthLevelIdx,
+          seabedDepth_m,
+          isLand
+        )
+        godasProfile = sampleGodasProfile(
+          godasSubgrid,
+          currentLat,
+          currentLon,
+          seabedDepth_m,
+          isLand
+        )
+      }
+
+      const localEstimate = getSubgridLocalEstimate(currentLat, currentLon, depth_m, monthIndex)
+      const isReal = sample !== null && godasSubgrid !== null
+
+      if (isReal && sample) {
+        onTelemetry({
+          depth: depth_m,
+          depthLevelIndex: depthLevelIdx,
+          temperature: sample.temperature,
+          salinity: sample.salinity,
+          density: sample.density,
+          chlorophyll: localEstimate.chlorophyll_mg_m3,
+          currentSpeed: sample.currentSpeed ?? localEstimate.current_speed_m_s,
+          currentU: sample.currentU ?? localEstimate.current_vector.u,
+          currentV: sample.currentV ?? localEstimate.current_vector.v,
+          temperatureProfile: godasProfile?.temperatures || localEstimate.ctd_profile?.temperatures || [],
+          salinityProfile: godasProfile?.salinities || localEstimate.ctd_profile?.salinities || [],
+          currentProfile: godasProfile?.currentSpeeds || [],
+          biomass: computeMarineBiomass(localEstimate.chlorophyll_mg_m3, depth_m),
+          regionalProfile: profile,
+          status: sample.status,
+          seabedDepth: seabedDepth_m,
+          isRealData: true,
+          dataSource: 'NOAA GODAS 3D (Real)',
+        })
+      } else {
+        onTelemetry({
+          depth: depth_m,
+          depthLevelIndex: depthLevelIdx,
+          temperature: isLand ? null : localEstimate.temperature_c,
+          salinity: isLand ? null : localEstimate.salinity_psu,
+          density: null,
+          chlorophyll: localEstimate.chlorophyll_mg_m3,
+          currentSpeed: localEstimate.current_speed_m_s,
+          currentU: localEstimate.current_vector.u,
+          currentV: localEstimate.current_vector.v,
+          temperatureProfile: localEstimate.ctd_profile?.temperatures || [],
+          salinityProfile: localEstimate.ctd_profile?.salinities || [],
+          biomass: localEstimate.marine_biomass || computeMarineBiomass(localEstimate.chlorophyll_mg_m3, depth_m),
+          regionalProfile: profile,
+          status: isLand ? 'land' : 'valid',
+          seabedDepth: seabedDepth_m,
+          isRealData: false,
+          dataSource: 'Hydrographic Model',
+        })
+      }
     }
   })
 
   return null
+}
+
+function SalinityField({
+  salinity,
+  currentDepth,
+  salinityProfile,
+}: {
+  salinity: number
+  currentDepth: number
+  salinityProfile: number[]
+}) {
+  const materialRef = useRef<THREE.ShaderMaterial>(null)
+  const fieldRef = useRef<THREE.Mesh>(null)
+  const { camera } = useThree()
+
+  const profile = useMemo(() => {
+    const values = new Array(32).fill(0)
+    if (!salinityProfile.length) return values
+
+    for (let i = 0; i < values.length; i += 1) {
+      const t = i / (values.length - 1)
+      const depth = t * 5000
+      values[i] = interpolateProfile(PROFILE_DEPTHS, salinityProfile, depth)
+    }
+    return values
+  }, [salinityProfile])
+
+  const uniforms = useMemo(() => {
+    return {
+      time: { value: 0 },
+      salinity: { value: salinity },
+      currentDepth: { value: currentDepth },
+      profile: { value: profile },
+    }
+  }, [salinity, currentDepth, profile])
+
+  useFrame(({ clock }) => {
+    if (!materialRef.current || !fieldRef.current) return
+    fieldRef.current.position.copy(camera.position)
+    materialRef.current.uniforms.time.value = clock.getElapsedTime()
+    materialRef.current.uniforms.salinity.value = salinity
+    materialRef.current.uniforms.currentDepth.value = currentDepth
+    materialRef.current.uniforms.profile.value = profile
+  })
+
+  return (
+    <mesh ref={fieldRef} scale={[1, 0.7, 1]}>
+      <sphereGeometry args={[45, 24, 16]} />
+      <shaderMaterial
+        ref={materialRef}
+        transparent
+        depthWrite={false}
+        depthTest={false}
+        blending={THREE.AdditiveBlending}
+        side={THREE.BackSide}
+        uniforms={uniforms}
+        vertexShader={`
+          varying vec3 vLocalPosition;
+          void main() {
+            vLocalPosition = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `}
+        fragmentShader={`
+          uniform float time;
+          uniform float salinity;
+          uniform float currentDepth;
+          uniform float profile[32];
+          varying vec3 vLocalPosition;
+
+          float hash(vec3 p) {
+            p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+            p *= 17.0;
+            return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+          }
+
+          float simpleNoise(vec3 p) {
+            vec3 i = floor(p);
+            vec3 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash(i);
+            float b = hash(i + vec3(1.0, 0.0, 0.0));
+            float c = hash(i + vec3(0.0, 1.0, 0.0));
+            float d = hash(i + vec3(1.0, 1.0, 0.0));
+            float e = hash(i + vec3(0.0, 0.0, 1.0));
+            float f1 = hash(i + vec3(1.0, 0.0, 1.0));
+            float g = hash(i + vec3(0.0, 1.0, 1.0));
+            float h = hash(i + vec3(1.0, 1.0, 1.0));
+            return mix(mix(mix(a, b, f.x), mix(c, d, f.x), f.y), mix(mix(e, f1, f.x), mix(g, h, f.x), f.y), f.z);
+          }
+
+          float fastTurbulence(vec3 p) {
+            return simpleNoise(p) * 0.7 + simpleNoise(p * 2.2) * 0.3;
+          }
+
+          vec3 salinityColor(float s) {
+            vec3 brackish  = vec3(0.05, 0.45, 0.85);
+            vec3 normal    = vec3(0.02, 0.68, 0.62);
+            vec3 saline    = vec3(0.75, 0.65, 0.15);
+            vec3 hypersal  = vec3(0.85, 0.25, 0.75);
+
+            if (s < 0.35) return mix(brackish, normal, smoothstep(0.0, 0.35, s));
+            if (s < 0.70) return mix(normal, saline, smoothstep(0.35, 0.70, s));
+            return mix(saline, hypersal, smoothstep(0.70, 1.0, s));
+          }
+
+          float profileSalinity(float normalizedDepth) {
+            float scaled = clamp(normalizedDepth, 0.0, 0.999) * 31.0;
+            float a = floor(scaled);
+            float b = min(a + 1.0, 31.0);
+            float f = scaled - a;
+            return mix(profile[int(a)], profile[int(b)], f);
+          }
+
+          void main() {
+            vec3 rayEnd = vLocalPosition;
+            float rayLength = length(rayEnd);
+            if (rayLength < 0.1) discard;
+            vec3 rayDirection = normalize(rayEnd);
+
+            const int STEPS = 14;
+            vec3 accumulatedColor = vec3(0.0);
+            float accumulatedAlpha = 0.0;
+
+            for (int i = 0; i < STEPS; i++) {
+              float fi = (float(i) + 0.5) / float(STEPS);
+              vec3 p = rayDirection * rayLength * fi;
+              if (cameraPosition.y + p.y > 0.0) continue;
+
+              float localDepth = max(0.0, currentDepth - p.y * 35.0);
+              float normalizedDepth = clamp(localDepth / 5000.0, 0.0, 1.0);
+
+              float sal = profileSalinity(normalizedDepth);
+              float normalizedSalinity = clamp((sal - 31.0) / 7.0, 0.0, 1.0);
+
+              vec3 flowPos = vec3(p.x * 0.05 + time * 0.015, p.y * 0.14, p.z * 0.05 - time * 0.010);
+              float structure = fastTurbulence(flowPos);
+
+              float salA = profileSalinity(clamp(normalizedDepth - 0.025, 0.0, 1.0));
+              float salB = profileSalinity(clamp(normalizedDepth + 0.025, 0.0, 1.0));
+              float halocline = smoothstep(0.008, 0.06, abs(salA - salB));
+
+              // Continuous baseline volumetric saline medium + halocline shimmer
+              float baselineMedium = 0.35 + 0.65 * structure;
+              float brineShimmer = 0.82 + 0.18 * sin(time * 1.8 + p.x * 2.4 + p.z * 2.1);
+
+              float radialDist = length(p.xz);
+              float spatialFalloff = 1.0 - smoothstep(18.0, 65.0, radialDist);
+              float depthFalloff = 1.0 - smoothstep(22.0, 60.0, abs(p.y));
+
+              float density = (baselineMedium + halocline * 2.2) * brineShimmer * spatialFalloff * depthFalloff;
+              vec3 color = salinityColor(normalizedSalinity);
+
+              float sampleAlpha = clamp(density * 0.05, 0.0, 0.085);
+              float remaining = 1.0 - accumulatedAlpha;
+              accumulatedColor += color * sampleAlpha * remaining;
+              accumulatedAlpha += sampleAlpha * remaining;
+
+              if (accumulatedAlpha > 0.80) break;
+            }
+
+            if (accumulatedAlpha < 0.004) discard;
+            gl_FragColor = vec4(accumulatedColor, accumulatedAlpha);
+          }
+        `}
+      />
+    </mesh>
+  )
 }
 
 function TemperatureField({
@@ -1151,7 +1518,7 @@ function TemperatureField({
 }
 
 const PROFILE_DEPTHS = [
-  0, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000,
+  5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 4000,
 ]
 
 function interpolateProfile(
@@ -1303,7 +1670,7 @@ function ThermalField({
               // Strictly restrict thermal stratification raymarching to underwater (below sea level)
               if (cameraPosition.y + p.y > 0.0) continue;
 
-              float localDepth = max(0.0, currentDepth - p.y * 92.0);
+              float localDepth = max(0.0, currentDepth - p.y * 35.0);
               float normalizedDepth = clamp(localDepth / 5000.0, 0.0, 1.0);
 
               float temp = profileTemperature(normalizedDepth);
@@ -1316,17 +1683,18 @@ function ThermalField({
               float tempB = profileTemperature(clamp(normalizedDepth + 0.025, 0.0, 1.0));
               float thermocline = smoothstep(0.015, 0.10, abs(tempA - tempB));
 
-              float thermalLayer = structure * (0.10 + thermocline * 0.95) * thermocline;
+              // Continuous baseline volumetric thermal medium + thermocline shear sheets
+              float baselineMedium = 0.35 + 0.65 * structure;
               float shimmer = 0.85 + 0.15 * sin(time * 1.4 + p.x * 2.0 + p.z * 1.7);
 
               float radialDist = length(p.xz);
               float spatialFalloff = 1.0 - smoothstep(18.0, 65.0, radialDist);
               float depthFalloff = 1.0 - smoothstep(22.0, 60.0, abs(p.y));
 
-              float density = thermalLayer * (0.45 + thermocline * 1.25) * shimmer * spatialFalloff * depthFalloff;
+              float density = (baselineMedium + thermocline * 2.2) * shimmer * spatialFalloff * depthFalloff;
               vec3 color = temperatureColor(normalizedTemperature);
 
-              float sampleAlpha = clamp(density * 0.06, 0.0, 0.09);
+              float sampleAlpha = clamp(density * 0.05, 0.0, 0.09);
               float remaining = 1.0 - accumulatedAlpha;
               accumulatedColor += color * sampleAlpha * remaining;
               accumulatedAlpha += sampleAlpha * remaining;
@@ -1441,22 +1809,75 @@ function DiveWorld({
   variable,
   selection,
   boundary,
+  timestamp,
   timeIndex,
   onTelemetry,
   onExit,
 }: Props) {
   // Mutable diver position reference for ZERO-overhead 60 FPS fish interaction
   const diverPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 10, 52))
+  const currentMonth = useMemo(
+    () => resolveDiveMonthIndex(timestamp, timeIndex),
+    [timestamp, timeIndex]
+  )
+
+  const diveBbox = useMemo<[number, number, number, number]>(() => {
+    if (boundary) return boundary.bbox
+    return [
+      Math.max(-44.9, selection.latitude - 1.2),
+      Math.min(31.9, selection.latitude + 1.2),
+      Math.max(20.1, selection.longitude - 1.2),
+      Math.min(124.9, selection.longitude + 1.2),
+    ]
+  }, [boundary, selection.latitude, selection.longitude])
+
+  const [terrainData, setTerrainData] = useState<TerrainSliceData | null>(null)
+  const [godasSubgrid, setGodasSubgrid] = useState<GodasSubgridData | null>(null)
+
+  // Load native ETOPO bedrock grid on mount into memory
+  useEffect(() => {
+    loadEtopoBathymetry().catch(() => {})
+  }, [])
+
+  // Fetch regional terrain slice
+  useEffect(() => {
+    let active = true
+    fetchTerrainSlice(diveBbox, 96)
+      .then((data) => {
+        if (active) setTerrainData(data)
+      })
+      .catch((err) => console.warn('Terrain fetch fallback:', err))
+
+    return () => {
+      active = false
+    }
+  }, [diveBbox])
+
+  // Fetch real NOAA GODAS 3D subgrid binary payload
+  useEffect(() => {
+    let active = true
+    fetchGodasRegionalSubgrid(diveBbox, timestamp)
+      .then((data) => {
+        if (active) setGodasSubgrid(data)
+      })
+      .catch((err) => console.warn('Real GODAS 3D fetch fallback:', err))
+
+    return () => {
+      active = false
+    }
+  }, [diveBbox, timestamp])
 
   const profile = useMemo(
-    () => getRegionalDiveProfile(selection.latitude, selection.longitude, timeIndex),
-    [selection.latitude, selection.longitude, timeIndex]
+    () => getRegionalDiveProfile(selection.latitude, selection.longitude, currentMonth),
+    [selection.latitude, selection.longitude, currentMonth]
   )
 
   const [telemetry, setTelemetry] = useState<DiveTelemetry>(() => ({
     depth: 0,
+    depthLevelIndex: 0,
     temperature: 28.5,
     salinity: 35.2,
+    density: 1024.1,
     chlorophyll: profile.chlorophyll,
     currentSpeed: 0.45,
     currentU: 0.3,
@@ -1464,6 +1885,10 @@ function DiveWorld({
     temperatureProfile: [28.5, 28.2, 27.8, 26.5, 24.0, 20.5, 16.2, 12.0, 8.5, 5.2, 3.8, 2.5, 2.0, 1.8, 1.5, 1.2],
     biomass: profile.biomass,
     regionalProfile: profile,
+    status: 'valid',
+    seabedDepth: 2500,
+    isRealData: false,
+    dataSource: 'Initializing...',
   }))
 
   const handleTelemetry = (next: DiveTelemetry) => {
@@ -1471,26 +1896,95 @@ function DiveWorld({
     onTelemetry(next)
   }
 
+  const dynamicFogColor = useMemo(() => {
+    const depth = telemetry.depth
+    const temp = telemetry.temperature ?? 22.0
+    const chl = telemetry.chlorophyll || 0.15
+
+    if (depth <= 0) {
+      return '#072e4a'
+    }
+
+    if (depth > 600) {
+      return '#01050d' // Abyssal zone: pitch black
+    }
+    if (depth > 250) {
+      return '#010f22' // Bathypelagic twilight
+    }
+    if (depth > 80) {
+      return '#021e38' // Mesopelagic indigo
+    }
+
+    // Epipelagic (< 80m): influenced by real Chlorophyll and Temperature
+    if (chl > 1.2) {
+      return '#033b2e' // Phytoplankton bloom emerald/jade
+    }
+    if (chl > 0.6) {
+      return '#04423b'
+    }
+    if (temp > 27.0) {
+      return '#03455b' // Warm tropical surface water
+    }
+    if (temp > 23.0) {
+      return '#02384c'
+    }
+    return '#022d42'
+  }, [telemetry.depth, telemetry.temperature, telemetry.chlorophyll])
+
+  const fogRange = useMemo(() => {
+    const depth = telemetry.depth
+    if (depth <= 0) return { near: 40, far: 360 }
+    if (depth > 500) return { near: 2, far: 85 }
+    if (depth > 150) return { near: 3, far: 110 }
+    return { near: 4, far: 140 }
+  }, [telemetry.depth])
+
+  const sunIntensity = useMemo(() => {
+    const depth = telemetry.depth
+    if (depth <= 0) return 5.8
+    return Math.max(0.0, 5.8 * Math.exp(-depth / 45.0))
+  }, [telemetry.depth])
+
+  const fillIntensity = useMemo(() => {
+    const depth = telemetry.depth
+    if (depth <= 0) return 2.2
+    return Math.max(0.0, 2.2 * Math.exp(-depth / 55.0))
+  }, [telemetry.depth])
+
+  const ambientIntensity = useMemo(() => {
+    const depth = telemetry.depth
+    if (depth <= 0) return 2.6
+    return Math.max(0.12, 2.6 * Math.exp(-depth / 95.0))
+  }, [telemetry.depth])
+
+  const dynamicAmbientColor = useMemo(() => {
+    const depth = telemetry.depth
+    const chl = telemetry.chlorophyll || 0.2
+    if (depth > 500) return '#031024'
+    if (chl > 1.0) return '#05483a'
+    return profile.ambientColor
+  }, [telemetry.depth, telemetry.chlorophyll, profile.ambientColor])
+
   return (
     <>
       <SkyDome />
-      <color attach="background" args={[profile.fogColor]} />
-      <fog attach="fog" args={[profile.fogColor, 40, 360]} />
+      <color attach="background" args={[dynamicFogColor]} />
+      <fog attach="fog" args={[dynamicFogColor, fogRange.near, fogRange.far]} />
 
       <ambientLight
-        intensity={2.6}
-        color={profile.ambientColor}
+        intensity={ambientIntensity}
+        color={dynamicAmbientColor}
       />
 
       <directionalLight
         position={[50, 100, 40]}
-        intensity={5.8}
+        intensity={sunIntensity}
         color="#fffaf0"
       />
 
       <directionalLight
         position={[-40, 45, -30]}
-        intensity={2.2}
+        intensity={fillIntensity}
         color="#b9fbff"
       />
 
@@ -1502,30 +1996,46 @@ function DiveWorld({
       <Terrain
         selection={selection}
         boundary={boundary}
+        terrainData={terrainData}
         currents={{ u: telemetry.currentU, v: telemetry.currentV, speed: telemetry.currentSpeed }}
       />
 
       <RegionalSeabedFeatures profile={profile} selection={selection} />
 
       {/* High-Performance GPU Phytoplankton Motes */}
-      <PhytoplanktonBloom chlorophyll={telemetry.chlorophyll || profile.chlorophyll} />
+      <PhytoplanktonBloom
+        chlorophyll={telemetry.chlorophyll || profile.chlorophyll}
+        depth={telemetry.depth}
+      />
 
       {/* 360-Instanced High-Speed Fish Flocking Baitball Simulation */}
       <FishSchools
         chlorophyll={telemetry.chlorophyll || profile.chlorophyll}
+        depth={telemetry.depth}
         diverPositionRef={diverPosRef}
       />
 
       {/* Optimized Volumetric Thermal Stratification Raymarching */}
       {variable === 'temperature' && (
         <TemperatureField
-          temperature={telemetry.temperature}
+          temperature={telemetry.temperature ?? 20.0}
           currentDepth={telemetry.depth}
           temperatureProfile={telemetry.temperatureProfile}
         />
       )}
 
-      <WaterParticles />
+      {/* Optimized Volumetric Haline Stratification & Refractive Shimmer */}
+      {variable === 'salinity' && (
+        <SalinityField
+          salinity={telemetry.salinity ?? 35.0}
+          currentDepth={telemetry.depth}
+          salinityProfile={telemetry.salinityProfile || [35.2, 35.2, 35.3, 35.4, 35.5, 35.4, 35.2, 35.0, 34.9, 34.8, 34.7, 34.7, 34.7, 34.7, 34.7, 34.7]}
+        />
+      )}
+
+      <WaterParticles
+        currents={{ u: telemetry.currentU, v: telemetry.currentV, speed: telemetry.currentSpeed }}
+      />
 
       <Stars
         radius={180}
@@ -1539,7 +2049,11 @@ function DiveWorld({
 
       <Diver
         selection={selection}
-        timeIndex={timeIndex}
+        boundary={boundary}
+        diveBbox={diveBbox}
+        terrainData={terrainData}
+        godasSubgrid={godasSubgrid}
+        monthIndex={currentMonth}
         diverPosRef={diverPosRef}
         onTelemetry={handleTelemetry}
       />

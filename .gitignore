@@ -9,9 +9,12 @@ backend/.venv/
 # Ocean data storage (large binaries managed via sync_data.py)
 data/raw/
 data/cache/
+data/processed/real/
 data/processed/cubes/*.bin
 data/processed/terrain/*.bin
 data/processed/*.db
+public/data/*.bin
+scratch/
 !data/.gitkeep
 !data/processed/README.md
 !data/processed/terrain/bathymetry_meta.json
