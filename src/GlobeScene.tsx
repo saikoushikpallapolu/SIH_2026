@@ -749,9 +749,9 @@ function OceanShader({
             }
 
             // Dynamic authentic 0.25-deg ocean data slice over Indian Ocean
-            if (uHasDataSlice > 0.5 && lat >= -44.875 && lat <= 32.0 && lon >= 20.125 && lon <= 124.875) {
-              float su = (lon - 20.125) / (124.875 - 20.125);
-              float sv = (lat - (-44.875)) / (32.0 - (-44.875));
+            if (uHasDataSlice > 0.5 && lat >= -44.99 && lat <= 32.01 && lon >= 20.01 && lon <= 125.01) {
+              float su = clamp((lon - 20.008333) / (125.008333 - 20.008333), 0.0, 1.0);
+              float sv = clamp((lat - (-44.991667)) / (32.008333 - (-44.991667)), 0.0, 1.0);
               float val = texture2D(uOceanDataSlice, vec2(su, sv)).r;
               if (val > -990.0) {
                 vec3 sliceColor = globalBaseColor;
@@ -767,12 +767,16 @@ function OceanShader({
                     float normC = clamp((log(max(val, 0.025)) - (-3.68888)) / 4.60517, 0.0, 1.0);
                     sliceColor = paletteAlga(normC);
                   }
+                } else {
+                  // Ocean Currents Speed Magnitude (m/s)
+                  float normSpd = clamp(val / 1.5, 0.0, 1.0);
+                  sliceColor = paletteSpeed(normSpd);
                 }
                 // Seamless hermite feathering at Indian Ocean data boundaries
-                float edgeFade = smoothstep(20.125, 23.5, lon) *
-                                 (1.0 - smoothstep(121.5, 124.875, lon)) *
-                                 smoothstep(-44.875, -41.5, lat) *
-                                 (1.0 - smoothstep(28.5, 32.0, lat));
+                float edgeFade = smoothstep(20.0, 24.0, lon) *
+                                 (1.0 - smoothstep(121.0, 125.0, lon)) *
+                                 smoothstep(-45.0, -41.0, lat) *
+                                 (1.0 - smoothstep(28.0, 32.0, lat));
                 globalBaseColor = mix(globalBaseColor, sliceColor, edgeFade);
               }
             }
