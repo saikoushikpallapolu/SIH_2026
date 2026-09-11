@@ -512,12 +512,6 @@ function OceanShader({
           varying vec3 vNormal;
           varying vec3 vPosition;
 
-          // Gaussian patch helper in spherical coordinates
-          float patchDist(float lat, float lon, float cLat, float cLon, float rLat, float rLon) {
-            float dLat = (lat - cLat) / rLat;
-            float dLon = (lon - cLon) / rLon;
-            return dLat * dLat + dLon * dLon;
-          }
 
           // 1. Temperature: cmocean thermal
           vec3 paletteThermal(float t) {
@@ -721,55 +715,13 @@ function OceanShader({
             }
             else if (uVariable < 1.5) {
               float baseSal = 0.52;
-              float atlHigh = exp(-patchDist(lat, lon, 25.0, -45.0, 16.0, 25.0)) * 0.22;
-              float medHigh = exp(-patchDist(lat, lon, 35.0, 18.0, 8.0, 20.0)) * 0.32;
-              float amazonLow = -exp(-patchDist(lat, lon, 4.0, -48.0, 8.0, 12.0)) * 0.38;
               float polarLow = -smoothstep(45.0, 70.0, abs(lat)) * 0.26;
-              float salNorm = clamp(baseSal + atlHigh + medHigh + amazonLow + polarLow + thermocline * 0.08, 0.0, 1.0);
+              float salNorm = clamp(baseSal + polarLow + thermocline * 0.08, 0.0, 1.0);
               globalBaseColor = paletteHaline(salNorm);
             }
             else if (uVariable < 2.5) {
               float coastProx = 1.0 - smoothstep(0.20, 0.48, texture2D(uWaterMask, vUv).r);
-
-              // 1. Somali Upwelling (Indian Ocean) - seasonal monsoon surge
-              float somali = exp(-patchDist(lat, lon, 9.5, 51.5, 7.0, 7.0)) * (0.85 + 0.5 * max(0.0, sin(uMonthPhase - 1.1)));
-              // 2. Malabar Coast / Sri Lanka Dome (Indian Ocean)
-              float malabar = exp(-patchDist(lat, lon, 11.5, 74.5, 6.0, 5.0)) * 0.72;
-              // 3. Ganges-Brahmaputra Delta (Bay of Bengal)
-              float ganges = exp(-patchDist(lat, lon, 19.5, 88.5, 6.5, 7.5)) * 0.82;
-              // 4. Mozambique & Agulhas Bank
-              float agulhas = exp(-patchDist(lat, lon, -30.0, 34.0, 8.0, 8.0)) * 0.75;
-              // 5. Peru / Humboldt Upwelling (Pacific Ocean - World's Largest Fishery Bloom)
-              float humboldt = exp(-patchDist(lat, lon, -14.5, -77.5, 14.0, 7.0)) * 0.95;
-              // 6. Benguela Upwelling (South Atlantic Ocean)
-              float benguela = exp(-patchDist(lat, lon, -23.0, 13.5, 11.0, 5.5)) * 0.88;
-              // 7. California Current Upwelling (North Pacific)
-              float california = exp(-patchDist(lat, lon, 38.0, -124.0, 12.0, 6.5)) * 0.78;
-              // 8. Canary / Mauritania Upwelling (North Atlantic)
-              float canary = exp(-patchDist(lat, lon, 22.0, -18.0, 10.0, 6.0)) * 0.80;
-              // 9. Amazon River Oceanic Plume (Atlantic)
-              float amazon = exp(-patchDist(lat, lon, 3.5, -49.0, 7.0, 10.0)) * 0.88;
-              // 10. Mississippi Delta / Gulf of Mexico
-              float mississippi = exp(-patchDist(lat, lon, 28.5, -89.5, 4.5, 6.0)) * 0.75;
-              // 11. Pacific Equatorial Upwelling Divergence Belt
-              float eqPacific = exp(-pow(lat / 3.8, 2.0)) * smoothstep(-175.0, -140.0, lon) * (1.0 - smoothstep(-85.0, -75.0, lon)) * 0.42;
-              // 12. Circum-Antarctic Subpolar Nutrient Belt
-              float subantarctic = smoothstep(-40.0, -56.0, lat) * (1.0 - smoothstep(-68.0, -78.0, lat)) * 0.52;
-              // 13. North Atlantic & North Pacific Subpolar Spring Blooms
-              float northSubpolar = smoothstep(45.0, 62.0, lat) * 0.48 * (0.8 + 0.35 * sin(uMonthPhase));
-
-              // Dynamic undulating biological filaments
-              float eddyFilament = sin(vPosition.x * 22.0 + sin(vPosition.y * 16.0 + uTime * 0.4) * 3.2) * 0.5 + 0.5;
-
-              // Continuous baseline everywhere across globe (0.14 baseline ensures visible marine cyan/teal, blooming into rich emeralds & golds)
-              float chlVal = clamp(
-                0.14 + coastProx * 0.46 +
-                somali + malabar + ganges + agulhas +
-                humboldt + benguela + california + canary + amazon + mississippi + eqPacific + subantarctic + northSubpolar +
-                eddyFilament * 0.08 - thermocline * 0.35,
-                0.0,
-                1.0
-              );
+              float chlVal = clamp(0.18 + coastProx * 0.42 - thermocline * 0.12, 0.0, 1.0);
               globalBaseColor = paletteAlga(chlVal);
             }
             else {

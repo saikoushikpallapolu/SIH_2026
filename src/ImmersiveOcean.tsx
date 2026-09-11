@@ -9,13 +9,13 @@ import {
   fetchGodasRegionalSubgrid,
   fetchTerrainSlice,
   getAuthoritativeSeabedDepth,
-  getChlorophyllAt,
   getRegionalDiveProfile,
   getSubgridLocalEstimate,
   loadEtopoBathymetry,
   querySubgridTelemetry,
   sampleGodasSubgrid,
   sampleGodasProfile,
+  sampleRealChlorophyll,
   type GodasFullProfile,
   type GodasSampleResult,
   type GodasSubgridData,
@@ -1277,6 +1277,8 @@ function Diver({
       }
 
       const localEstimate = getSubgridLocalEstimate(currentLat, currentLon, depth_m, monthIndex)
+      const realChl = sampleRealChlorophyll(currentLat, currentLon)
+      const effectiveChl = realChl ?? localEstimate.chlorophyll_mg_m3
       const isReal = sample !== null && godasSubgrid !== null
 
       if (isReal && sample) {
@@ -1286,19 +1288,19 @@ function Diver({
           temperature: sample.temperature,
           salinity: sample.salinity,
           density: sample.density,
-          chlorophyll: localEstimate.chlorophyll_mg_m3,
+          chlorophyll: effectiveChl,
           currentSpeed: sample.currentSpeed ?? localEstimate.current_speed_m_s,
           currentU: sample.currentU ?? localEstimate.current_vector.u,
           currentV: sample.currentV ?? localEstimate.current_vector.v,
           temperatureProfile: godasProfile?.temperatures || localEstimate.ctd_profile?.temperatures || [],
           salinityProfile: godasProfile?.salinities || localEstimate.ctd_profile?.salinities || [],
           currentProfile: godasProfile?.currentSpeeds || [],
-          biomass: computeMarineBiomass(localEstimate.chlorophyll_mg_m3, depth_m),
+          biomass: computeMarineBiomass(effectiveChl, depth_m),
           regionalProfile: profile,
           status: sample.status,
           seabedDepth: seabedDepth_m,
           isRealData: true,
-          dataSource: 'NOAA GODAS 3D (Real)',
+          dataSource: 'NOAA GODAS 3D & ESA OC-CCI (Real)',
         })
       } else {
         onTelemetry({
@@ -1307,13 +1309,13 @@ function Diver({
           temperature: isLand ? null : localEstimate.temperature_c,
           salinity: isLand ? null : localEstimate.salinity_psu,
           density: null,
-          chlorophyll: localEstimate.chlorophyll_mg_m3,
+          chlorophyll: effectiveChl,
           currentSpeed: localEstimate.current_speed_m_s,
           currentU: localEstimate.current_vector.u,
           currentV: localEstimate.current_vector.v,
           temperatureProfile: localEstimate.ctd_profile?.temperatures || [],
           salinityProfile: localEstimate.ctd_profile?.salinities || [],
-          biomass: localEstimate.marine_biomass || computeMarineBiomass(localEstimate.chlorophyll_mg_m3, depth_m),
+          biomass: computeMarineBiomass(effectiveChl, depth_m),
           regionalProfile: profile,
           status: isLand ? 'land' : 'valid',
           seabedDepth: seabedDepth_m,
@@ -1886,7 +1888,7 @@ function DiveWorld({
     biomass: profile.biomass,
     regionalProfile: profile,
     status: 'valid',
-    seabedDepth: 2500,
+    seabedDepth: profile.seabedDepth ?? 2500,
     isRealData: false,
     dataSource: 'Initializing...',
   }))

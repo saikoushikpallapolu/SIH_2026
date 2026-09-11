@@ -239,6 +239,69 @@ def get_godas_slice_2d(variable: str, time_idx: int, depth: float) -> np.ndarray
     return np.nan_to_num(regridded, nan=-999.0).astype(np.float32)
 
 
+def sample_real_godas_profile(lat: float, lon: float, t_idx: int) -> dict[str, Any] | None:
+    """Extract real 16-level GODAS temperature, salinity, and currents at (lat, lon)."""
+    t_ds, s_ds, c_ds, _ = get_godas_datasets()
+    if t_ds is None or s_ds is None or c_ds is None:
+        return None
+    t_lats = t_ds.lat.values
+    t_lons = t_ds.lon.values
+    if lat < t_lats[0] or lat > t_lats[-1] or lon < t_lons[0] or lon > t_lons[-1]:
+        return None
+    lat_idx = max(0, min(int(np.searchsorted(t_lats, lat)) - 1, len(t_lats) - 2))
+    lon_idx = max(0, min(int(np.searchsorted(t_lons, lon)) - 1, len(t_lons) - 2))
+    lat0, lat1 = t_lats[lat_idx], t_lats[lat_idx + 1]
+    lon0, lon1 = t_lons[lon_idx], t_lons[lon_idx + 1]
+    u = float((lat - lat0) / (lat1 - lat0)) if lat1 != lat0 else 0.0
+    v = float((lon - lon0) / (lon1 - lon0)) if lon1 != lon0 else 0.0
+
+    t_box = t_ds["thetao"].isel(time=t_idx, lat=slice(lat_idx, lat_idx + 2), lon=slice(lon_idx, lon_idx + 2)).values
+    s_box = s_ds["so"].isel(time=t_idx, lat=slice(lat_idx, lat_idx + 2), lon=slice(lon_idx, lon_idx + 2)).values
+
+    t_curve = (1.0 - u) * (1.0 - v) * t_box[:, 0, 0] + (1.0 - u) * v * t_box[:, 0, 1] + u * (1.0 - v) * t_box[:, 1, 0] + u * v * t_box[:, 1, 1]
+    s_curve = (1.0 - u) * (1.0 - v) * s_box[:, 0, 0] + (1.0 - u) * v * s_box[:, 0, 1] + u * (1.0 - v) * s_box[:, 1, 0] + u * v * s_box[:, 1, 1]
+
+    c_lons = c_ds.lon.values
+    c_lon_idx = max(0, min(int(np.searchsorted(c_lons, lon)) - 1, len(c_lons) - 2))
+    c_lon0, c_lon1 = c_lons[c_lon_idx], c_lons[c_lon_idx + 1]
+    c_v = float((lon - c_lon0) / (c_lon1 - c_lon0)) if c_lon1 != c_lon0 else 0.0
+    u_box = c_ds["uo"].isel(time=t_idx, lat=slice(lat_idx, lat_idx + 2), lon=slice(c_lon_idx, c_lon_idx + 2)).values
+    v_box = c_ds["vo"].isel(time=t_idx, lat=slice(lat_idx, lat_idx + 2), lon=slice(c_lon_idx, c_lon_idx + 2)).values
+    u_curve = (1.0 - u) * (1.0 - c_v) * u_box[:, 0, 0] + (1.0 - u) * c_v * u_box[:, 0, 1] + u * (1.0 - c_v) * u_box[:, 1, 0] + u * c_v * u_box[:, 1, 1]
+    v_curve = (1.0 - u) * (1.0 - c_v) * v_box[:, 0, 0] + (1.0 - u) * c_v * v_box[:, 0, 1] + u * (1.0 - c_v) * v_box[:, 1, 0] + u * c_v * v_box[:, 1, 1]
+
+    return {
+        "temperatures": [round(float(x), 2) if not np.isnan(x) else None for x in t_curve],
+        "salinities": [round(float(x), 2) if not np.isnan(x) else None for x in s_curve],
+        "currents_u": [round(float(x), 3) if not np.isnan(x) else None for x in u_curve],
+        "currents_v": [round(float(x), 3) if not np.isnan(x) else None for x in v_curve],
+    }
+
+
+def sample_real_chlorophyll(lat: float, lon: float, month: int) -> float | None:
+    """Sample real ESA OC-CCI chlorophyll-a at (lat, lon) for the given month index."""
+    ds = get_cci_chl_dataset()
+    if ds is None:
+        return None
+    lats = ds.latitude.values
+    lons = ds.longitude.values
+    if lat > lats[0] or lat < lats[-1] or lon < lons[0] or lon > lons[-1]:
+        return None
+    cci_idx = month + CCI_CHL_CUBE_OFFSET
+    if cci_idx < 0 or cci_idx >= len(ds.time):
+        return None
+    lat_idx = max(0, min(int(np.searchsorted(-lats, -lat)) - 1, len(lats) - 2))
+    lon_idx = max(0, min(int(np.searchsorted(lons, lon)) - 1, len(lons) - 2))
+    box = ds["chl"].isel(time=cci_idx, latitude=slice(lat_idx, lat_idx + 2), longitude=slice(lon_idx, lon_idx + 2)).values
+    if np.all(np.isnan(box)):
+        return None
+    u = float((lats[lat_idx] - lat) / (lats[lat_idx] - lats[lat_idx + 1]))
+    v = float((lon - lons[lon_idx]) / (lons[lon_idx + 1] - lons[lon_idx]))
+    box_clean = np.where(np.isnan(box), 0.0, box)
+    val = (1.0 - u) * (1.0 - v) * box_clean[0, 0] + (1.0 - u) * v * box_clean[0, 1] + u * (1.0 - v) * box_clean[1, 0] + u * v * box_clean[1, 1]
+    return round(float(val), 3)
+
+
 # Global memmap handles
 _bath_memmap: np.ndarray | None = None
 _temp_memmap: np.ndarray | None = None
@@ -573,44 +636,78 @@ def subgrid_telemetry(
 
     is_land = elevation_m > 0.0
 
-    # 2. Temperature profile
-    temp_mem = get_temp_memmap()
+    # 2. Temperature & Salinity profiles
+    data_source = "25-Year Reanalysis Cube"
     temp_profile: list[float] = []
-    if temp_mem is not None and not is_land:
-        for k in range(16):
-            val = w00 * temp_mem[month, k, i0, j0] + w10 * temp_mem[month, k, i0, j1] + w01 * temp_mem[month, k, i1, j0] + w11 * temp_mem[month, k, i1, j1]
-            temp_profile.append(round(float(val), 2))
-    else:
-        # Physical fallbacks if cube is missing or on land
-        temp_profile = [28.5, 28.3, 27.8, 26.2, 24.1, 21.0, 17.5, 14.2, 10.5, 7.2, 5.1, 4.0, 3.2, 2.7, 2.4, 2.1]
-
-    # 3. Salinity profile
-    sal_mem = get_sal_memmap()
     sal_profile: list[float] = []
-    if sal_mem is not None and not is_land:
-        for k in range(16):
-            val = w00 * sal_mem[month, k, i0, j0] + w10 * sal_mem[month, k, i0, j1] + w01 * sal_mem[month, k, i1, j0] + w11 * sal_mem[month, k, i1, j1]
-            sal_profile.append(round(float(val), 2))
-    else:
-        sal_profile = [35.2, 35.2, 35.3, 35.4, 35.5, 35.4, 35.2, 35.0, 34.9, 34.8, 34.7, 34.7, 34.7, 34.7, 34.7, 34.7]
-
-    # 4. Currents & Chlorophyll
-    u_mem, v_mem, chl_mem = get_u_memmap(), get_v_memmap(), get_chl_memmap()
     current_u = 0.0
     current_v = 0.0
-    chlorophyll = 0.15
     atten = float(np.exp(-max(0.0, depth) / 320.0))
-    if u_mem is not None and not is_land:
-        current_u = round(float(w00 * u_mem[month, i0, j0] + w10 * u_mem[month, i0, j1] + w01 * u_mem[month, i1, j0] + w11 * u_mem[month, i1, j1]) * atten, 3)
-    if v_mem is not None and not is_land:
-        current_v = round(float(w00 * v_mem[month, i0, j0] + w10 * v_mem[month, i0, j1] + w01 * v_mem[month, i1, j0] + w11 * v_mem[month, i1, j1]) * atten, 3)
-    if chl_mem is not None and not is_land:
-        chlorophyll = round(float(w00 * chl_mem[month, i0, j0] + w10 * chl_mem[month, i0, j1] + w01 * chl_mem[month, i1, j0] + w11 * chl_mem[month, i1, j1]), 3)
+
+    if 264 <= month <= 299 and not is_land:
+        godas_res = sample_real_godas_profile(lat, lon, month - 264)
+        if godas_res:
+            valid_t = [x for x in godas_res["temperatures"] if x is not None]
+            if valid_t:
+                temp_profile = [x if x is not None else 2.0 for x in godas_res["temperatures"]]
+                sal_profile = [x if x is not None else 34.7 for x in godas_res["salinities"]]
+                u_raw = godas_res["currents_u"][0] if godas_res["currents_u"] else 0.0
+                v_raw = godas_res["currents_v"][0] if godas_res["currents_v"] else 0.0
+                current_u = round((u_raw or 0.0) * atten, 3)
+                current_v = round((v_raw or 0.0) * atten, 3)
+                data_source = "NOAA-GODAS-3D-Real"
+
+    if not temp_profile and not is_land:
+        temp_mem = get_temp_memmap()
+        sal_mem = get_sal_memmap()
+        if temp_mem is not None:
+            for k in range(16):
+                val = w00 * temp_mem[month, k, i0, j0] + w10 * temp_mem[month, k, i0, j1] + w01 * temp_mem[month, k, i1, j0] + w11 * temp_mem[month, k, i1, j1]
+                temp_profile.append(round(float(val), 2))
+        if sal_mem is not None:
+            for k in range(16):
+                val = w00 * sal_mem[month, k, i0, j0] + w10 * sal_mem[month, k, i0, j1] + w01 * sal_mem[month, k, i1, j0] + w11 * sal_mem[month, k, i1, j1]
+                sal_profile.append(round(float(val), 2))
+
+    if not temp_profile and not is_land:
+        lat_f = max(0.0, 1.0 - abs(lat) / 50.0)
+        s_temp = 14.0 + 15.0 * lat_f
+        temp_profile = [round(s_temp - (s_temp - 2.0) * (k / 15.0)**0.5, 2) for k in range(16)]
+        sal_profile = [35.2, 35.2, 35.3, 35.4, 35.5, 35.4, 35.2, 35.0, 34.9, 34.8, 34.7, 34.7, 34.7, 34.7, 34.7, 34.7]
+
+    if is_land:
+        temp_profile = []
+        sal_profile = []
+
+    # 3. Chlorophyll
+    chlorophyll = 0.15
+    if not is_land:
+        real_chl = sample_real_chlorophyll(lat, lon, month)
+        if real_chl is not None:
+            chlorophyll = real_chl
+            if data_source == "NOAA-GODAS-3D-Real":
+                data_source = "NOAA-GODAS-3D & ESA-OC-CCI-v6-Real"
+            else:
+                data_source = "ESA-OC-CCI-v6-Real"
+        else:
+            chl_mem = get_chl_memmap()
+            if chl_mem is not None:
+                chlorophyll = round(float(w00 * chl_mem[month, i0, j0] + w10 * chl_mem[month, i0, j1] + w01 * chl_mem[month, i1, j0] + w11 * chl_mem[month, i1, j1]), 3)
+
+    # 4. Currents if not already set by GODAS
+    if current_u == 0.0 and current_v == 0.0 and not is_land:
+        u_mem, v_mem = get_u_memmap(), get_v_memmap()
+        if u_mem is not None:
+            current_u = round(float(w00 * u_mem[month, i0, j0] + w10 * u_mem[month, i0, j1] + w01 * u_mem[month, i1, j0] + w11 * u_mem[month, i1, j1]) * atten, 3)
+        if v_mem is not None:
+            current_v = round(float(w00 * v_mem[month, i0, j0] + w10 * v_mem[month, i0, j1] + w01 * v_mem[month, i1, j0] + w11 * v_mem[month, i1, j1]) * atten, 3)
 
     current_speed = round(float(np.sqrt(current_u**2 + current_v**2)), 3)
 
     # 5. Interpolate temperature at the requested depth
-    def interpolate_depth(curve: list[float], target_depth: float) -> float:
+    def interpolate_depth(curve: list[float], target_depth: float) -> float | None:
+        if not curve:
+            return None
         if target_depth <= DEPTH_LEVELS[0]:
             return curve[0]
         if target_depth >= DEPTH_LEVELS[-1]:
@@ -679,7 +776,7 @@ def subgrid_telemetry(
             "salinities": sal_profile,
         },
         "month_index": month,
-        "source": "OceanScope 4D Dual-Scale Binary Engine"
+        "source": data_source,
     }
 
 
@@ -954,10 +1051,21 @@ def get_slice(
                     slice_data = np.array(cube_3d[0], dtype=np.float32)
 
     elif variable == "chlorophyll":
-        chl_mem = get_chl_memmap()
-        if chl_mem is None:
-            raise HTTPException(status_code=503, detail="Chlorophyll cube not loaded")
-        slice_data = np.array(chl_mem[month], dtype=np.float32)
+        ds = get_cci_chl_dataset()
+        if ds is not None:
+            cci_idx = month + CCI_CHL_CUBE_OFFSET
+            if 0 <= cci_idx < len(ds.time):
+                raw = ds["chl"].isel(time=cci_idx).values.astype(np.float32)
+                raw = np.nan_to_num(raw, nan=0.0)
+                # Flip vertically to ascending lat (-45 to 32) matching IO grid convention
+                slice_data = np.flipud(raw).astype(np.float32)
+                data_source = "ESA-OC-CCI-v6-Real"
+        if slice_data is None:
+            chl_mem = get_chl_memmap()
+            if chl_mem is None:
+                raise HTTPException(status_code=503, detail="Chlorophyll dataset not loaded")
+            slice_data = np.array(chl_mem[month], dtype=np.float32)
+
         if depth > 0:
             # Photic euphotic zone attenuation with DCM peak at ~45m
             if depth <= 45.0:
@@ -1005,9 +1113,43 @@ def currents_grid(month: int = Query(299, ge=0, le=299)) -> Response:
     """Return raw Float32 (U, V) velocity grid shape (2, 309, 421) for client-side vector integration."""
     u_mem = get_u_memmap()
     v_mem = get_v_memmap()
+    if (u_mem is None or v_mem is None) and (264 <= month <= 299):
+        t_ds, s_ds, c_ds, d_ds = get_godas_datasets()
+        if c_ds is not None and _godas_w00 is not None and _godas_lat_i0 is not None and _godas_c_lon_j0 is not None:
+            godas_t_idx = month - 264
+            u_level = c_ds["uo"].isel(time=godas_t_idx, level=0).values.astype(np.float32)
+            v_level = c_ds["vo"].isel(time=godas_t_idx, level=0).values.astype(np.float32)
+            u_clean = np.nan_to_num(u_level, nan=0.0)
+            v_clean = np.nan_to_num(v_level, nan=0.0)
+            u_regrid = (
+                _godas_c_w00 * u_clean[_godas_lat_i0[:, None], _godas_c_lon_j0[None, :]]
+                + _godas_c_w10 * u_clean[_godas_lat_i0[:, None], _godas_c_lon_j1[None, :]]
+                + _godas_c_w01 * u_clean[_godas_lat_i1[:, None], _godas_c_lon_j0[None, :]]
+                + _godas_c_w11 * u_clean[_godas_lat_i1[:, None], _godas_c_lon_j1[None, :]]
+            )
+            v_regrid = (
+                _godas_c_w00 * v_clean[_godas_lat_i0[:, None], _godas_c_lon_j0[None, :]]
+                + _godas_c_w10 * v_clean[_godas_lat_i0[:, None], _godas_c_lon_j1[None, :]]
+                + _godas_c_w01 * v_clean[_godas_lat_i1[:, None], _godas_c_lon_j0[None, :]]
+                + _godas_c_w11 * v_clean[_godas_lat_i1[:, None], _godas_c_lon_j1[None, :]]
+            )
+            grid_uv = np.stack([u_regrid.astype(np.float32), v_regrid.astype(np.float32)], axis=0)
+            return Response(
+                content=grid_uv.tobytes(),
+                media_type="application/octet-stream",
+                headers={
+                    "X-Grid-Channels": "2",
+                    "X-Grid-Rows": str(N_LAT),
+                    "X-Grid-Cols": str(N_LON),
+                    "X-Month": str(month),
+                    "X-Data-Source": "NOAA-GODAS-3D-Real",
+                    "Access-Control-Expose-Headers": "*",
+                },
+            )
+
     if u_mem is None or v_mem is None:
         raise HTTPException(status_code=503, detail="Currents cubes not loaded")
-    
+
     grid_uv = np.stack([u_mem[month].astype(np.float32), v_mem[month].astype(np.float32)], axis=0)
     return Response(
         content=grid_uv.tobytes(),
@@ -1018,7 +1160,7 @@ def currents_grid(month: int = Query(299, ge=0, le=299)) -> Response:
             "X-Grid-Cols": str(N_LON),
             "X-Month": str(month),
             "Access-Control-Expose-Headers": "*",
-        }
+        },
     )
 
 
@@ -1056,12 +1198,18 @@ def transect_telemetry(
             elevation = float(w00 * bath[i0, j0] + w10 * bath[i0, j1] + w01 * bath[i1, j0] + w11 * bath[i1, j1])
 
         temps = []
-        if temp_mem is not None:
+        if 264 <= month <= 299:
+            godas_res = sample_real_godas_profile(lat, lon, month - 264)
+            if godas_res and godas_res["temperatures"][0] is not None:
+                temps = [x if x is not None else 2.0 for x in godas_res["temperatures"]]
+        if not temps and temp_mem is not None:
             for k in range(16):
                 val = w00 * temp_mem[month, k, i0, j0] + w10 * temp_mem[month, k, i0, j1] + w01 * temp_mem[month, k, i1, j0] + w11 * temp_mem[month, k, i1, j1]
                 temps.append(round(float(val), 2))
-        else:
-            temps = [27.0 - k * 1.5 for k in range(16)]
+        if not temps:
+            lat_f = max(0.0, 1.0 - abs(lat) / 50.0)
+            s_temp = 14.0 + 15.0 * lat_f
+            temps = [round(s_temp - (s_temp - 2.0) * (k / 15.0)**0.5, 2) for k in range(16)]
 
         points.append({
             "step": s,
@@ -1635,9 +1783,17 @@ def ocean_profile(
     temp_mem = get_temp_memmap()
     sal_mem = get_sal_memmap()
 
+    # 2. Query 16-level temperature & salinity
     levels: list[dict[str, Any]] = []
     valid_temps: list[tuple[float, float]] = []  # (depth_m, temp_c)
     valid_sals: list[tuple[float, float]] = []
+
+    godas_res = None
+    if 264 <= month_idx <= 299:
+        godas_res = sample_real_godas_profile(lat, lon, month_idx - 264)
+
+    temp_mem = get_temp_memmap()
+    sal_mem = get_sal_memmap()
 
     for k in range(16):
         d_m = DEPTH_LEVELS[k]
@@ -1647,12 +1803,18 @@ def ocean_profile(
         sal_psu: float | None = None
 
         if in_water_column:
-            if temp_mem is not None:
+            if godas_res is not None and godas_res["temperatures"][k] is not None:
+                temp_c = godas_res["temperatures"][k]
+                valid_temps.append((d_m, temp_c))
+            elif temp_mem is not None:
                 t = float(w00 * temp_mem[month_idx, k, i0, j0] + w10 * temp_mem[month_idx, k, i0, j1] + w01 * temp_mem[month_idx, k, i1, j0] + w11 * temp_mem[month_idx, k, i1, j1])
                 temp_c = round(t, 2)
                 valid_temps.append((d_m, temp_c))
 
-            if sal_mem is not None:
+            if godas_res is not None and godas_res["salinities"][k] is not None:
+                sal_psu = godas_res["salinities"][k]
+                valid_sals.append((d_m, sal_psu))
+            elif sal_mem is not None:
                 s = float(w00 * sal_mem[month_idx, k, i0, j0] + w10 * sal_mem[month_idx, k, i0, j1] + w01 * sal_mem[month_idx, k, i1, j0] + w11 * sal_mem[month_idx, k, i1, j1])
                 sal_psu = round(s, 2)
                 valid_sals.append((d_m, sal_psu))
@@ -1717,7 +1879,7 @@ def ocean_profile(
             "depth_range_m": halocline_range,
         },
         "provenance": {
-            "source": "INCOIS / Copernicus GLORYS 25-Year Reanalysis",
+            "source": "NOAA GODAS 3D (Real Monthly)" if godas_res is not None and godas_res["temperatures"][0] is not None else "INCOIS / Copernicus GLORYS 25-Year Reanalysis",
             "bathymetry_source": "NOAA ETOPO 2022 (0.25° native resolution)",
         },
     }
