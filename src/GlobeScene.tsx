@@ -282,12 +282,8 @@ function TsunamiPropagationLayer({
       {/* 1. Epicenter Seismic Pinpoint Beacon */}
       <group position={epicPos}>
         <mesh>
-          <sphereGeometry args={[0.022, 20, 20]} />
+          <sphereGeometry args={[0.016, 20, 20]} />
           <meshBasicMaterial color="#00e5ff" />
-        </mesh>
-        <mesh ref={pulseRing1}>
-          <ringGeometry args={[0.014, 0.028, 32]} />
-          <meshBasicMaterial color="#00e5ff" transparent opacity={0.7} side={THREE.DoubleSide} />
         </mesh>
       </group>
 
@@ -1453,11 +1449,9 @@ function Marker({
 function HolographicBeacon({ selection }: { selection: Selection }) {
   const isSector = isPointInIndianOcean(selection.latitude, selection.longitude)
   const localPos = useMemo(
-    () => latLngToVector3(selection.latitude, selection.longitude, RADIUS + 0.005),
+    () => latLngToVector3(selection.latitude, selection.longitude, RADIUS + 0.004),
     [selection.latitude, selection.longitude]
   )
-  const ring1Ref = useRef<THREE.Mesh>(null)
-  const ring2Ref = useRef<THREE.Mesh>(null)
 
   const normal = useMemo(() => localPos.clone().normalize(), [localPos])
   const quaternion = useMemo(() => {
@@ -1466,46 +1460,24 @@ function HolographicBeacon({ selection }: { selection: Selection }) {
     return q
   }, [normal])
 
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime() * 1.6
-    if (ring1Ref.current) {
-      const p1 = t % 1
-      ring1Ref.current.scale.setScalar(0.2 + p1 * 1.4)
-      const mat = ring1Ref.current.material as THREE.MeshBasicMaterial
-      mat.opacity = Math.max(0, (1 - p1) * 0.85)
-    }
-    if (ring2Ref.current) {
-      const p2 = (t + 0.5) % 1
-      ring2Ref.current.scale.setScalar(0.2 + p2 * 1.4)
-      const mat = ring2Ref.current.material as THREE.MeshBasicMaterial
-      mat.opacity = Math.max(0, (1 - p2) * 0.85)
-    }
-  })
-
   const primaryColor = isSector ? '#00f2fe' : '#f59e0b'
-  const secondaryColor = isSector ? '#4facfe' : '#fbbf24'
   const beamColor = isSector ? '#70e2ff' : '#fde68a'
 
   return (
     <group position={localPos} quaternion={quaternion}>
-      <mesh>
-        <circleGeometry args={[0.024, 32]} />
-        <meshBasicMaterial color={primaryColor} transparent opacity={0.95} side={THREE.DoubleSide} />
+      {/* Discreet base pinpoint dot - NO concentric rings */}
+      <mesh position={[0, 0, 0.003]}>
+        <sphereGeometry args={[0.004, 16, 16]} />
+        <meshBasicMaterial color={primaryColor} />
       </mesh>
-      <mesh ref={ring1Ref}>
-        <ringGeometry args={[0.035, 0.05, 32]} />
-        <meshBasicMaterial color={secondaryColor} transparent opacity={0.8} side={THREE.DoubleSide} />
+      {/* Fine vertical needle */}
+      <mesh position={[0, 0, 0.035]}>
+        <cylinderGeometry args={[0.001, 0.001, 0.07, 8]} />
+        <meshBasicMaterial color={beamColor} transparent opacity={0.8} />
       </mesh>
-      <mesh ref={ring2Ref}>
-        <ringGeometry args={[0.035, 0.05, 32]} />
-        <meshBasicMaterial color={primaryColor} transparent opacity={0.6} side={THREE.DoubleSide} />
-      </mesh>
+      {/* Glowing tip bead */}
       <mesh position={[0, 0, 0.07]}>
-        <cylinderGeometry args={[0.0018, 0.0018, 0.14, 8]} />
-        <meshBasicMaterial color={beamColor} transparent opacity={0.75} />
-      </mesh>
-      <mesh position={[0, 0, 0.14]}>
-        <sphereGeometry args={[0.012, 16, 16]} />
+        <sphereGeometry args={[0.005, 16, 16]} />
         <meshBasicMaterial color="#ffffff" />
       </mesh>
     </group>
@@ -1557,14 +1529,13 @@ function GlobeHotspotMarker({
         <meshBasicMaterial transparent opacity={0} />
       </mesh>
 
-      {/* Surface target ring */}
-      <mesh>
-        <ringGeometry args={[0.016, 0.028, 24]} />
+      {/* Surface target base bead */}
+      <mesh position={[0, 0, 0.002]}>
+        <sphereGeometry args={[0.004, 12, 12]} />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={isSelected ? 0.95 : hovered ? 0.8 : 0.45}
-          side={THREE.DoubleSide}
+          opacity={isSelected ? 0.95 : hovered ? 0.8 : 0.6}
         />
       </mesh>
 
@@ -1957,8 +1928,8 @@ function Scene({
           timeIndex={effectiveTimeIndex}
         />
 
-        {/* Holographic Sonar Beacon at clicked coordinate (hidden when boundary box is framing area) */}
-        {!activeBoundary && <HolographicBeacon selection={selection} />}
+        {/* Precision pinpoint beacon at user-selected coordinate (only shown when user clicks a point or enables spots) */}
+        {(Boolean(teleportNonce) || showHotspots) && !activeBoundary && <HolographicBeacon selection={selection} />}
       </group>
 
       <Atmosphere />
