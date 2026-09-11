@@ -407,76 +407,53 @@ export function VectorGlobeOverlays({
         </lineSegments>
       )}
 
-      {/* 5. 3D Island Target Rings & Navigational Beacons (Visible whenever showIslands is true) */}
-      {showIslands &&
+      {/* 5. Clean Island HUD Labels (Shown only when showIslandLabels toggle is active, with NO obscuring concentric rings) */}
+      {showIslandLabels &&
         NOTABLE_ISLANDS.map((island) => {
           const pos = latLngToVector3(island.latitude, island.longitude, RADIUS + 0.006)
-          const normal = pos.clone().normalize()
-          const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal)
-          const ringRad = island.ringRadius || 0.015
 
           return (
-            <group key={island.id} position={pos} quaternion={q}>
-              {/* Glowing turquoise coral atoll halo ring */}
-              <mesh>
-                <ringGeometry args={[ringRad * 0.7, ringRad * 1.35, 24]} />
-                <meshBasicMaterial
-                  color={island.color}
-                  transparent
-                  opacity={0.72}
-                  side={THREE.DoubleSide}
-                  depthWrite={false}
-                />
-              </mesh>
-              {/* Luminous central beacon bead */}
-              <mesh position={[0, 0, 0.004]}>
-                <sphereGeometry args={[0.0035, 12, 12]} />
-                <meshBasicMaterial color={island.color} />
-              </mesh>
-
-              {/* Floating HTML HUD label (Shown when showIslandLabels is true) */}
-              {showIslandLabels && (
-                <Html position={[0, 0, 0.025]} center pointerEvents="none" zIndexRange={[50, 0]}>
-                  <div
-                    style={{
-                      background: 'rgba(2, 6, 23, 0.88)',
-                      border: `1px solid ${island.color}88`,
-                      boxShadow: `0 2px 10px ${island.color}33`,
-                      borderRadius: '4px',
-                      padding: '3px 7px',
-                      color: '#ffffff',
-                      fontSize: '9.5px',
-                      fontWeight: 600,
-                      letterSpacing: '0.02em',
-                      whiteSpace: 'nowrap',
-                      transform: 'translateY(-14px)',
-                      backdropFilter: 'blur(6px)',
-                      fontFamily: 'Inter, system-ui, sans-serif',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '1px',
-                      userSelect: 'none',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span
-                        style={{
-                          width: '5px',
-                          height: '5px',
-                          borderRadius: '50%',
-                          background: island.color,
-                        }}
-                      />
-                      <span>{island.name}</span>
-                    </div>
-                    {island.desc && (
-                      <span style={{ fontSize: '8px', color: '#94a3b8', paddingLeft: '9px' }}>
-                        {island.desc}
-                      </span>
-                    )}
+            <group key={island.id} position={pos}>
+              <Html position={[0, 0, 0.015]} center pointerEvents="none" zIndexRange={[50, 0]}>
+                <div
+                  style={{
+                    background: 'rgba(2, 6, 23, 0.88)',
+                    border: `1px solid ${island.color}88`,
+                    boxShadow: `0 2px 10px ${island.color}33`,
+                    borderRadius: '4px',
+                    padding: '3px 7px',
+                    color: '#ffffff',
+                    fontSize: '9.5px',
+                    fontWeight: 600,
+                    letterSpacing: '0.02em',
+                    whiteSpace: 'nowrap',
+                    transform: 'translateY(-14px)',
+                    backdropFilter: 'blur(6px)',
+                    fontFamily: 'Inter, system-ui, sans-serif',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '1px',
+                    userSelect: 'none',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span
+                      style={{
+                        width: '5px',
+                        height: '5px',
+                        borderRadius: '50%',
+                        background: island.color,
+                      }}
+                    />
+                    <span>{island.name}</span>
                   </div>
-                </Html>
-              )}
+                  {island.desc && (
+                    <span style={{ fontSize: '8px', color: '#94a3b8', paddingLeft: '9px' }}>
+                      {island.desc}
+                    </span>
+                  )}
+                </div>
+              </Html>
             </group>
           )
         })}
