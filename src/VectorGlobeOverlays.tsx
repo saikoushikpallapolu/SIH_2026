@@ -88,38 +88,206 @@ function buildGraticuleGeometry(altitudeOffset = 0.002): { standard: THREE.Buffe
 /**
  * Key Indian Ocean Islands with verified coordinates and navigational badges.
  */
+/**
+ * Key Indian Ocean Islands & Coral Atolls with verified coordinates and navigational badges.
+ */
 export const NOTABLE_ISLANDS = [
+  // Lakshadweep Archipelago (India)
   {
-    id: 'lakshadweep',
-    name: 'Lakshadweep Archipelago',
-    desc: '36 Coral Atolls & Cays · Kavaratti · Agatti',
+    id: 'lakshadweep-kavaratti',
+    name: 'Kavaratti (Lakshadweep)',
+    desc: 'Capital Atoll · 10.57°N, 72.64°E',
     latitude: 10.57,
     longitude: 72.64,
     color: '#00f2fe',
+    ringRadius: 0.016,
   },
   {
-    id: 'andaman',
-    name: 'Andaman Islands',
-    desc: 'Great Andaman Chain · Port Blair',
-    latitude: 11.67,
+    id: 'lakshadweep-agatti',
+    name: 'Agatti & Bangaram',
+    desc: 'Reef Airstrip & Coral Lagoon',
+    latitude: 10.85,
+    longitude: 72.18,
+    color: '#00f2fe',
+    ringRadius: 0.014,
+  },
+  {
+    id: 'lakshadweep-minicoy',
+    name: 'Minicoy Atoll (Maliku)',
+    desc: 'Southernmost Lakshadweep Atoll',
+    latitude: 8.28,
+    longitude: 73.05,
+    color: '#00f2fe',
+    ringRadius: 0.015,
+  },
+  {
+    id: 'lakshadweep-kadmat',
+    name: 'Kadmat & Amini Atolls',
+    desc: 'Central Amindivi Subgroup',
+    latitude: 11.23,
+    longitude: 72.78,
+    color: '#00f2fe',
+    ringRadius: 0.014,
+  },
+  {
+    id: 'lakshadweep-andrott',
+    name: 'Andrott Island',
+    desc: 'Easternmost Lakshadweep Cay',
+    latitude: 10.81,
+    longitude: 73.68,
+    color: '#00f2fe',
+    ringRadius: 0.013,
+  },
+
+  // Andaman Islands (India)
+  {
+    id: 'andaman-portblair',
+    name: 'Port Blair (South Andaman)',
+    desc: 'Capital & Deepwater Port',
+    latitude: 11.62,
     longitude: 92.73,
     color: '#38bdf8',
+    ringRadius: 0.018,
   },
   {
-    id: 'nicobar',
-    name: 'Nicobar Islands',
-    desc: 'Great & Car Nicobar · Indira Point',
-    latitude: 7.00,
-    longitude: 93.85,
+    id: 'andaman-havelock',
+    name: 'Swaraj Dweep (Havelock)',
+    desc: "Ritchie's Archipelago Reefs",
+    latitude: 11.98,
+    longitude: 92.98,
     color: '#38bdf8',
+    ringRadius: 0.014,
   },
   {
-    id: 'maldives',
-    name: 'Maldives Atolls',
-    desc: 'Coral Atoll Ridge · Malé',
+    id: 'andaman-north',
+    name: 'North Andaman (Diglipur)',
+    desc: 'Saddle Peak & Smith Island',
+    latitude: 13.25,
+    longitude: 92.98,
+    color: '#38bdf8',
+    ringRadius: 0.016,
+  },
+  {
+    id: 'andaman-little',
+    name: 'Little Andaman',
+    desc: 'Ten Degree Channel Border',
+    latitude: 10.75,
+    longitude: 92.55,
+    color: '#38bdf8',
+    ringRadius: 0.016,
+  },
+
+  // Nicobar Islands (India)
+  {
+    id: 'nicobar-car',
+    name: 'Car Nicobar',
+    desc: 'Northernmost Nicobar Group',
+    latitude: 9.16,
+    longitude: 92.78,
+    color: '#0ea5e9',
+    ringRadius: 0.015,
+  },
+  {
+    id: 'nicobar-great',
+    name: 'Great Nicobar (Indira Point)',
+    desc: 'Southernmost Indian Landmass · 6.75°N',
+    latitude: 6.75,
+    longitude: 93.85,
+    color: '#0ea5e9',
+    ringRadius: 0.020,
+  },
+  {
+    id: 'nicobar-nancowry',
+    name: 'Nancowry & Kamorta',
+    desc: 'Protected Natural Harbor',
+    latitude: 8.05,
+    longitude: 93.53,
+    color: '#0ea5e9',
+    ringRadius: 0.014,
+  },
+
+  // Maldives Atolls
+  {
+    id: 'maldives-male',
+    name: 'Malé Atoll (Kaafu)',
+    desc: 'Capital Coral Atoll',
     latitude: 4.17,
     longitude: 73.51,
     color: '#2dd4bf',
+    ringRadius: 0.016,
+  },
+  {
+    id: 'maldives-addu',
+    name: 'Addu Atoll (Gan)',
+    desc: 'Southern Hemisphere Coral Atoll',
+    latitude: -0.63,
+    longitude: 73.16,
+    color: '#2dd4bf',
+    ringRadius: 0.016,
+  },
+  {
+    id: 'maldives-ari',
+    name: 'Ari Atoll (Alif Alif)',
+    desc: 'Western Barrier Reef Rim',
+    latitude: 3.80,
+    longitude: 72.85,
+    color: '#2dd4bf',
+    ringRadius: 0.018,
+  },
+
+  // Sri Lanka
+  {
+    id: 'sri-lanka-jaffna',
+    name: 'Jaffna & Palk Strait',
+    desc: "Adam's Bridge Continental Shelf",
+    latitude: 9.66,
+    longitude: 80.01,
+    color: '#67e8f9',
+    ringRadius: 0.016,
+  },
+
+  // Chagos Archipelago
+  {
+    id: 'chagos-diego',
+    name: 'Diego Garcia (Chagos)',
+    desc: 'Submerged Chagos-Laccadive Plateau',
+    latitude: -7.32,
+    longitude: 72.42,
+    color: '#38bdf8',
+    ringRadius: 0.018,
+  },
+
+  // Seychelles
+  {
+    id: 'seychelles-mahe',
+    name: 'Mahé (Seychelles)',
+    desc: 'Granitic Mid-Ocean Bank',
+    latitude: -4.67,
+    longitude: 55.45,
+    color: '#2dd4bf',
+    ringRadius: 0.018,
+  },
+
+  // Mascarene Islands
+  {
+    id: 'mauritius',
+    name: 'Mauritius',
+    desc: 'Mascarene Subsea Plateau',
+    latitude: -20.16,
+    longitude: 57.50,
+    color: '#38bdf8',
+    ringRadius: 0.018,
+  },
+
+  // Cocos & Christmas
+  {
+    id: 'cocos-keeling',
+    name: 'Cocos (Keeling) Atoll',
+    desc: 'Eastern Indian Ocean Ring Atoll',
+    latitude: -12.16,
+    longitude: 96.87,
+    color: '#00f2fe',
+    ringRadius: 0.016,
   },
 ]
 
@@ -239,64 +407,76 @@ export function VectorGlobeOverlays({
         </lineSegments>
       )}
 
-      {/* 5. Prominent 3D Island Target Rings & HUD Labels */}
-      {showIslandLabels &&
+      {/* 5. 3D Island Target Rings & Navigational Beacons (Visible whenever showIslands is true) */}
+      {showIslands &&
         NOTABLE_ISLANDS.map((island) => {
-          const pos = latLngToVector3(island.latitude, island.longitude, RADIUS + 0.008)
+          const pos = latLngToVector3(island.latitude, island.longitude, RADIUS + 0.006)
           const normal = pos.clone().normalize()
           const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal)
+          const ringRad = island.ringRadius || 0.015
 
           return (
             <group key={island.id} position={pos} quaternion={q}>
-              {/* Subtle glowing atoll halo ring */}
+              {/* Glowing turquoise coral atoll halo ring */}
               <mesh>
-                <ringGeometry args={[0.012, 0.022, 20]} />
+                <ringGeometry args={[ringRad * 0.7, ringRad * 1.35, 24]} />
                 <meshBasicMaterial
                   color={island.color}
                   transparent
-                  opacity={0.65}
+                  opacity={0.72}
                   side={THREE.DoubleSide}
+                  depthWrite={false}
                 />
               </mesh>
-              <mesh position={[0, 0, 0.008]}>
-                <sphereGeometry args={[0.004, 12, 12]} />
+              {/* Luminous central beacon bead */}
+              <mesh position={[0, 0, 0.004]}>
+                <sphereGeometry args={[0.0035, 12, 12]} />
                 <meshBasicMaterial color={island.color} />
               </mesh>
 
-              {/* Floating HTML HUD label */}
-              <Html position={[0, 0, 0.025]} center pointerEvents="none" zIndexRange={[50, 0]}>
-                <div
-                  style={{
-                    background: 'rgba(2, 6, 23, 0.85)',
-                    border: `1px solid ${island.color}88`,
-                    boxShadow: `0 2px 10px ${island.color}33`,
-                    borderRadius: '4px',
-                    padding: '3px 7px',
-                    color: '#ffffff',
-                    fontSize: '9.5px',
-                    fontWeight: 600,
-                    letterSpacing: '0.02em',
-                    whiteSpace: 'nowrap',
-                    transform: 'translateY(-14px)',
-                    backdropFilter: 'blur(6px)',
-                    fontFamily: 'Inter, system-ui, sans-serif',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    userSelect: 'none',
-                  }}
-                >
-                  <span
+              {/* Floating HTML HUD label (Shown when showIslandLabels is true) */}
+              {showIslandLabels && (
+                <Html position={[0, 0, 0.025]} center pointerEvents="none" zIndexRange={[50, 0]}>
+                  <div
                     style={{
-                      width: '5px',
-                      height: '5px',
-                      borderRadius: '50%',
-                      background: island.color,
+                      background: 'rgba(2, 6, 23, 0.88)',
+                      border: `1px solid ${island.color}88`,
+                      boxShadow: `0 2px 10px ${island.color}33`,
+                      borderRadius: '4px',
+                      padding: '3px 7px',
+                      color: '#ffffff',
+                      fontSize: '9.5px',
+                      fontWeight: 600,
+                      letterSpacing: '0.02em',
+                      whiteSpace: 'nowrap',
+                      transform: 'translateY(-14px)',
+                      backdropFilter: 'blur(6px)',
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1px',
+                      userSelect: 'none',
                     }}
-                  />
-                  <span>{island.name}</span>
-                </div>
-              </Html>
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span
+                        style={{
+                          width: '5px',
+                          height: '5px',
+                          borderRadius: '50%',
+                          background: island.color,
+                        }}
+                      />
+                      <span>{island.name}</span>
+                    </div>
+                    {island.desc && (
+                      <span style={{ fontSize: '8px', color: '#94a3b8', paddingLeft: '9px' }}>
+                        {island.desc}
+                      </span>
+                    )}
+                  </div>
+                </Html>
+              )}
             </group>
           )
         })}

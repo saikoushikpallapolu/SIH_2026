@@ -408,7 +408,7 @@ function OceanShader({
   tsunamiScenario?: TsunamiScenario
   tsunamiHour?: number
 }) {
-  const [earthMap, waterMask, texSumatra, texMakran, texWharton] = useLoader(
+  const [earthMap, waterMask, texSumatra, texMakran, texWharton, texBathymetry] = useLoader(
     THREE.TextureLoader,
     [
       EARTH_DAY_MAP,
@@ -416,6 +416,7 @@ function OceanShader({
       '/data/tsunami_travel_time_2004_sumatra.png',
       '/data/tsunami_travel_time_1945_makran.png',
       '/data/tsunami_travel_time_2012_wharton.png',
+      '/data/indian_ocean_bathymetry.png',
     ]
   )
   // High-Resolution Anisotropic Texture Filtering for crisp zoom
@@ -432,7 +433,14 @@ function OceanShader({
     waterMask.minFilter = THREE.LinearMipmapLinearFilter
     waterMask.magFilter = THREE.LinearFilter
     waterMask.needsUpdate = true
-  }, [earthMap, waterMask])
+
+    texBathymetry.colorSpace = THREE.SRGBColorSpace
+    texBathymetry.anisotropy = 16
+    texBathymetry.generateMipmaps = true
+    texBathymetry.minFilter = THREE.LinearMipmapLinearFilter
+    texBathymetry.magFilter = THREE.LinearFilter
+    texBathymetry.needsUpdate = true
+  }, [earthMap, waterMask, texBathymetry])
 
   const material = useMemo(
     () =>
@@ -448,6 +456,7 @@ function OceanShader({
           uOverlayStrength: { value: overlayStrength },
           uEarthMap: { value: earthMap },
           uWaterMask: { value: waterMask },
+          uBathymetryMap: { value: texBathymetry },
           uTsunamiActive: { value: tsunamiActive ? 1.0 : 0.0 },
           uTsunamiHour: { value: tsunamiHour },
           uTsunamiPropMap: { value: texSumatra },
@@ -496,6 +505,7 @@ function OceanShader({
           uniform float uOverlayStrength;
           uniform sampler2D uEarthMap;
           uniform sampler2D uWaterMask;
+          uniform sampler2D uBathymetryMap;
           uniform float uTsunamiActive;
           uniform float uTsunamiHour;
           uniform sampler2D uTsunamiPropMap;
@@ -869,8 +879,18 @@ function OceanShader({
             } else {
               dataColor = globalBaseColor * (0.65 + light * 0.60);
             }
-            vec3 naturalShadedEarth = earth * (0.50 + light * 0.50);
-            vec3 litOcean = mix(naturalShadedEarth, dataColor, uOverlayStrength);
+            // Natural Earth baseline with Google Earth-style bathymetric seafloor relief
+            vec3 naturalOcean = earth * (0.50 + light * 0.50);
+            if (inOisstDomain) {
+              float edgeFadeBathy = smoothstep(20.0, 23.5, lon) *
+                                    (1.0 - smoothstep(121.5, 125.0, lon)) *
+                                    smoothstep(-45.0, -41.5, lat) *
+                                    (1.0 - smoothstep(28.5, 32.0, lat));
+              vec3 bathyColor = texture2D(uBathymetryMap, vec2(su, sv)).rgb * (0.75 + light * 0.35);
+              naturalOcean = mix(naturalOcean, bathyColor, edgeFadeBathy * 0.94);
+            }
+
+            vec3 litOcean = mix(naturalOcean, dataColor, uOverlayStrength);
 
             // High-resolution antialiased coastline:
             // The visual shoreline is strictly governed by the high-resolution sub-pixel
@@ -882,7 +902,7 @@ function OceanShader({
           }
         `,
       }),
-    [variable, earthMap, waterMask, overlayStrength]
+    [variable, earthMap, waterMask, texBathymetry, overlayStrength]
   )
 
   // ─── SST (temperature, depth=0): authoritative three-state real OISST path ───
@@ -1955,7 +1975,7 @@ function Scene({
 
       <OrbitControls
         enablePan={false}
-        minDistance={1.606}
+        minDistance={1.72}
         maxDistance={5.2}
         enableDamping
         dampingFactor={0.06}
@@ -1969,7 +1989,7 @@ function Scene({
 
 export default function GlobeScene(props: GlobeSceneProps) {
   return (
-    <Canvas camera={{ position: [0.65, 0.75, -4.4], fov: 38 }} dpr={[1, 2]} gl={{ antialias: true }}>
+    <Canvas camera={{ position: [0.65, 0.75, -4.4], fov: 38, near: 0.01, far: 50 }} dpr={[1, 2]} gl={{ antialias: true }}>
       <Suspense fallback={null}>
         <Scene {...props} />
       </Suspense>
