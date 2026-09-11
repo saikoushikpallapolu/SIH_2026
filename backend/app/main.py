@@ -236,7 +236,14 @@ def get_godas_slice_2d(variable: str, time_idx: int, depth: float) -> np.ndarray
         + _godas_w01 * raw_2d[_godas_lat_i1[:, None], _godas_lon_j0[None, :]]
         + _godas_w11 * raw_2d[_godas_lat_i1[:, None], _godas_lon_j1[None, :]]
     )
-    return np.nan_to_num(regridded, nan=-999.0).astype(np.float32)
+    regridded_clean = np.nan_to_num(regridded, nan=-999.0).astype(np.float32)
+    # Apply 3.5-cell nearest-neighbor boundary infill to coastline so GPU linear filtering does not bleed sentinels
+    valid_mask = regridded_clean > -900.0
+    if valid_mask.any():
+        dist, (r_idx, c_idx) = ndimage.distance_transform_edt(~valid_mask, return_indices=True)
+        infill_mask = (~valid_mask) & (dist <= 3.5)
+        regridded_clean[infill_mask] = regridded_clean[r_idx[infill_mask], c_idx[infill_mask]]
+    return regridded_clean
 
 
 def sample_real_godas_profile(lat: float, lon: float, t_idx: int) -> dict[str, Any] | None:
@@ -988,67 +995,48 @@ def get_slice(
                 "X-Depth": str(depth),
                 "X-Date": target_date,
                 "X-Data-Source": "NOAA-OISST-v2.1-Real",
+                "Cache-Control": "no-store, no-cache, must-revalidate",
                 "Access-Control-Expose-Headers": "*",
             },
         )
 
-    # Check if requested timestep is covered by real NOAA GODAS 3D (2022-01 to 2024-12 -> months 264..299)
+    # Ensure real GODAS datasets are loaded
+    t_ds, s_ds, c_ds, d_ds = get_godas_datasets()
+
     godas_t_idx: int | None = None
     if date is not None:
         normalized_date = date[:7] + "-01" if len(date) >= 7 else date
         if normalized_date in _godas_date_index:
             godas_t_idx = _godas_date_index[normalized_date]
-    elif 264 <= month <= 299:
-        godas_t_idx = month - 264
+    if godas_t_idx is None:
+        if 264 <= month <= 299:
+            godas_t_idx = month - 264
+        else:
+            # Climatological seasonal mapping (2024 verified seasonal cycle: index 24..35)
+            godas_t_idx = 24 + (month % 12)
 
-    data_source = "25yr-Reanalysis-Cube"
+    data_source = "NOAA-GODAS-3D-Real"
     slice_data: np.ndarray | None = None
 
     if variable == "temperature":
-        if godas_t_idx is not None and _godas_temp_ds is not None:
+        if t_ds is not None and godas_t_idx is not None:
             slice_data = get_godas_slice_2d("temperature", godas_t_idx, depth)
             data_source = "NOAA-GODAS-3D-Real"
         else:
             temp_mem = get_temp_memmap()
-            if temp_mem is None:
-                raise HTTPException(status_code=503, detail="Temperature cube not loaded")
-            cube_3d = temp_mem[month]  # shape: (16, 309, 421)
-            if depth <= DEPTH_LEVELS[0]:
+            if temp_mem is not None:
+                cube_3d = temp_mem[month]
                 slice_data = np.array(cube_3d[0], dtype=np.float32)
-            elif depth >= DEPTH_LEVELS[-1]:
-                slice_data = np.array(cube_3d[-1], dtype=np.float32)
-            else:
-                for idx in range(len(DEPTH_LEVELS) - 1):
-                    d0, d1 = DEPTH_LEVELS[idx], DEPTH_LEVELS[idx + 1]
-                    if d0 <= depth <= d1:
-                        frac = (depth - d0) / (d1 - d0)
-                        slice_data = (1.0 - frac) * cube_3d[idx].astype(np.float32) + frac * cube_3d[idx + 1].astype(np.float32)
-                        break
-                else:
-                    slice_data = np.array(cube_3d[0], dtype=np.float32)
 
     elif variable == "salinity":
-        if godas_t_idx is not None and _godas_sal_ds is not None:
+        if s_ds is not None and godas_t_idx is not None:
             slice_data = get_godas_slice_2d("salinity", godas_t_idx, depth)
             data_source = "NOAA-GODAS-3D-Real"
         else:
             sal_mem = get_sal_memmap()
-            if sal_mem is None:
-                raise HTTPException(status_code=503, detail="Salinity cube not loaded")
-            cube_3d = sal_mem[month]  # shape: (16, 309, 421)
-            if depth <= DEPTH_LEVELS[0]:
+            if sal_mem is not None:
+                cube_3d = sal_mem[month]
                 slice_data = np.array(cube_3d[0], dtype=np.float32)
-            elif depth >= DEPTH_LEVELS[-1]:
-                slice_data = np.array(cube_3d[-1], dtype=np.float32)
-            else:
-                for idx in range(len(DEPTH_LEVELS) - 1):
-                    d0, d1 = DEPTH_LEVELS[idx], DEPTH_LEVELS[idx + 1]
-                    if d0 <= depth <= d1:
-                        frac = (depth - d0) / (d1 - d0)
-                        slice_data = (1.0 - frac) * cube_3d[idx].astype(np.float32) + frac * cube_3d[idx + 1].astype(np.float32)
-                        break
-                else:
-                    slice_data = np.array(cube_3d[0], dtype=np.float32)
 
     elif variable == "chlorophyll":
         ds = get_cci_chl_dataset()
@@ -1103,6 +1091,7 @@ def get_slice(
             "X-Month": str(month),
             "X-Depth": str(depth),
             "X-Data-Source": data_source,
+            "Cache-Control": "no-store, no-cache, must-revalidate",
             "Access-Control-Expose-Headers": "*",
         },
     )

@@ -134,6 +134,11 @@ export default function App() {
   const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
   const [teleportNonce, setTeleportNonce] = useState<number>(0)
   const [showInstruments, setShowInstruments] = useState<boolean>(false)
+  const [overlayStrength, setOverlayStrength] = useState<number>(0.0) // Default 0.0: pristine base Earth model without data overlays
+  const [showSpecialSpots, setShowSpecialSpots] = useState<boolean>(false) // Default false: clean view of globe
+  const [showIslandLabels, setShowIslandLabels] = useState<boolean>(false) // Default false: clean view of globe
+  const [showVectorBorders, setShowVectorBorders] = useState<boolean>(true)
+  const [showGraticule, setShowGraticule] = useState<boolean>(true)
   const [telemetry, setTelemetry] = useState<SubgridTelemetry | null>(null)
   const [profileOpen, setProfileOpen] = useState<boolean>(false)
   const [zenMode, setZenMode] = useState<boolean>(false)
@@ -436,7 +441,7 @@ export default function App() {
             timestamp={selectedTimestamp}
             timeIndex={monthIndex}
             mode={mode}
-            overlayStrength={0.78}
+            overlayStrength={overlayStrength}
             instruments={showInstruments ? instruments : []}
             selection={selection}
             teleportNonce={teleportNonce}
@@ -454,6 +459,10 @@ export default function App() {
             activeBoundary={activeBoundary}
             anchorCorner={anchorCorner}
             hoverCorner={hoverCorner}
+            showVectorBorders={showVectorBorders}
+            showGraticule={showGraticule}
+            showIslandLabels={showIslandLabels}
+            showHotspots={showSpecialSpots}
             onInstrument={handleInstrumentSelect}
             onSelectPoint={handlePointSelect}
             onSelectStation={handleStationSelect}
@@ -570,139 +579,7 @@ export default function App() {
         </button>
       )}
 
-      {/* 100% Area Selection Guidance & Benchmark Presets */}
-      {!zenMode && (mode === 'explore' || mode === 'currents') && (
-        <aside className="area-selector-toolbar glass">
-          <button
-            className={`draw-toggle-btn ${isSelectingArea ? 'active' : ''}`}
-            onClick={handleToggleAreaSelection}
-            title={isSelectingArea ? 'Cancel area selection (Esc)' : 'Draw geographic bounding box on globe'}
-          >
-            {isSelectingArea ? <X size={13} /> : <Crosshair size={13} />}
-            <span>{isSelectingArea ? 'Cancel' : 'Select Area'}</span>
-          </button>
 
-          <div className="area-guide-tag">
-            <Square size={13} color="#00f2fe" />
-            <span className="draw-instructions">
-              {anchorCorner
-                ? `✦ Corner A: (${anchorCorner.latitude.toFixed(1)}°, ${anchorCorner.longitude.toFixed(1)}°) — Click opposite corner to complete area`
-                : isSelectingArea
-                ? '✦ Area selection active — Click globe to set first corner (Esc to cancel)'
-                : activeBoundary
-                ? `✦ Region Selected (${activeBoundary.width_km} × ${activeBoundary.height_km} km) — Click 'Select Area' to draw a new region`
-                : '✦ Click \'Select Area\' to define a regional 3D bounding box'}
-            </span>
-          </div>
-
-          {activeBoundary && !isSelectingArea && (
-            <button
-              className="benchmark-chip"
-              onClick={() => {
-                setActiveBoundary(null)
-                setAnchorCorner(null)
-                setHoverCorner(null)
-              }}
-              title="Clear current area selection"
-            >
-              <X size={11} /> Clear
-            </button>
-          )}
-
-          <div className="benchmark-chips-row">
-            {BENCHMARK_REGIONS.map((reg) => (
-              <button
-                key={reg.id}
-                className={`benchmark-chip ${activeBoundary?.label === reg.name ? 'active' : ''}`}
-                onClick={() => handleBenchmarkSelect(reg.boundary)}
-                title={reg.subtitle}
-              >
-                {reg.name.split('&')[0].trim()}
-              </button>
-            ))}
-          </div>
-        </aside>
-      )}
-
-      {/* Floating Selected Region Action Card on Globe */}
-      {!zenMode && (mode === 'explore' || mode === 'currents') && activeBoundary && !anchorCorner && !isSelectingArea && (
-        <aside className="selected-region-card glass">
-          <div className="selected-region-header">
-            <span className="selected-region-title">
-              {activeBoundary.label || 'Selected Marine Region'}
-            </span>
-            <button
-              className="icon-btn"
-              onClick={() => setActiveBoundary(null)}
-              title="Clear selection"
-            >
-              <X size={14} />
-            </button>
-          </div>
-
-          <div className="selected-region-stats">
-            <div className="region-stat-item">
-              <label>Span</label>
-              <strong>{activeBoundary.width_km} × {activeBoundary.height_km} km</strong>
-            </div>
-            <div className="region-stat-item">
-              <label>Surface Area</label>
-              <strong>{activeBoundary.area_km2.toLocaleString()} km²</strong>
-            </div>
-            <div className="region-stat-item">
-              <label>Lat Bounds</label>
-              <strong>{activeBoundary.bbox[0].toFixed(1)}° to {activeBoundary.bbox[1].toFixed(1)}°N</strong>
-            </div>
-            <div className="region-stat-item">
-              <label>Lon Bounds</label>
-              <strong>{activeBoundary.bbox[2].toFixed(1)}° to {activeBoundary.bbox[3].toFixed(1)}°E</strong>
-            </div>
-          </div>
-
-          <div className="selected-region-actions">
-            {boundaryContainsMarine(activeBoundary) ? (
-              <button
-                className="dive-now-btn"
-                onClick={() => {
-                  setMode('dive')
-                  setIsTsunamiPlaying(false)
-                }}
-                title="Enter 3D Digital Twin Block with true ETOPO bathymetry, coastline, and CTD telemetry"
-              >
-                <Navigation size={13} />
-                <span>3D Deep Dive</span>
-              </button>
-            ) : (
-              <button
-                className="dive-now-btn disabled"
-                disabled
-                title="3D Deep Dive is calibrated for marine and coastal regions. Please select an area that includes ocean waters."
-              >
-                <Lock size={13} />
-                <span>Ocean Waters Required</span>
-              </button>
-            )}
-            <button
-              className="teleport-btn"
-              onClick={() => setHotspotsOpen(true)}
-              title="Open Ocean Hotspots & Biomes Drawer"
-            >
-              <Sparkles size={13} color="#10b981" /> Hotspots
-            </button>
-            <button
-              className="clear-region-btn"
-              onClick={() => {
-                setActiveBoundary(null)
-                setAnchorCorner(null)
-                setHoverCorner(null)
-              }}
-              title="Clear selection to draw again"
-            >
-              Clear
-            </button>
-          </div>
-        </aside>
-      )}
 
       {/* 2. CURRENTS MODE: Floating Direction & Velocity Compass Probe HUD */}
       {!zenMode && mode === 'currents' && telemetry && (
@@ -1229,129 +1106,390 @@ export default function App() {
         </>
       )}
 
-      {/* Standard Floating Bottom Dock for Explore, Currents & Dive Mode */}
+      {/* Ergonomic Side Docks: All Controls on Left & Right Flanks (100% Clear Vertical View) */}
       {!zenMode && mode !== 'tsunami' && (
-        <footer className="bottom-dock glass">
-          <div className="dock-top-row">
-            {/* Variable Pills */}
-            <div className="variable-pills">
+        <>
+          {/* LEFT SIDE DOCK: Ocean Layers, Intensity/Depth Sliders & Map Annotation Toggles */}
+          <aside className="side-dock-left glass" aria-label="Layers and Display Controls">
+            {/* 1. Scientific Variables & Natural Earth Mode */}
+            <div className="dock-section">
+              <div className="dock-section-title">
+                <Layers3 size={12} color="#00f2fe" />
+                <span>OCEAN LAYERS</span>
+              </div>
+              <div className="vertical-var-pills">
+                <button
+                  className={`var-pill ${overlayStrength === 0 ? 'active' : ''}`}
+                  onClick={() => setOverlayStrength(0.0)}
+                  title="Pristine Natural Earth Globe (0% Data Overlay, True Satellite)"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Globe2 size={13} />
+                    <span>Natural Earth</span>
+                  </div>
+                  <i style={{ color: '#4fc3f7' }} />
+                </button>
+                <button
+                  className={`var-pill ${variable === 'temperature' && overlayStrength > 0 ? 'active' : ''}`}
+                  onClick={() => {
+                    setVariable('temperature')
+                    if (overlayStrength === 0) setOverlayStrength(0.78)
+                    if (mode === 'currents') setMode('explore')
+                  }}
+                  title="cmocean thermal: Sea Surface Temperature & Thermocline"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Thermometer size={13} />
+                    <span>Thermal (SST)</span>
+                  </div>
+                  <i style={{ color: '#ff6b4a' }} />
+                </button>
+                <button
+                  className={`var-pill ${variable === 'salinity' && overlayStrength > 0 ? 'active' : ''}`}
+                  onClick={() => {
+                    setVariable('salinity')
+                    if (overlayStrength === 0) setOverlayStrength(0.78)
+                    if (mode === 'currents') setMode('explore')
+                  }}
+                  title="cmocean haline: Arabian Evaporation Basin vs Bengal Plumes"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Droplets size={13} />
+                    <span>Salinity</span>
+                  </div>
+                  <i style={{ color: '#5ce5d5' }} />
+                </button>
+                <button
+                  className={`var-pill ${variable === 'chlorophyll' && overlayStrength > 0 ? 'active' : ''}`}
+                  onClick={() => {
+                    setVariable('chlorophyll')
+                    if (overlayStrength === 0) setOverlayStrength(0.78)
+                    if (mode === 'currents') setMode('explore')
+                  }}
+                  title="NASA alga: Coastal Upwelling Blooms vs Oligotrophic Desert"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Sparkles size={13} />
+                    <span>Chlorophyll</span>
+                  </div>
+                  <i style={{ color: '#7cd362' }} />
+                </button>
+                <button
+                  className={`var-pill ${variable === 'currents' && overlayStrength > 0 ? 'active' : ''}`}
+                  onClick={() => {
+                    setVariable('currents')
+                    if (overlayStrength === 0) setOverlayStrength(0.78)
+                    setMode('currents')
+                  }}
+                  title="cmocean speed: Active Geodesic Streamline Flow"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Wind size={13} />
+                    <span>Ocean Currents</span>
+                  </div>
+                  <i style={{ color: '#00f2fe' }} />
+                </button>
+              </div>
+            </div>
+
+            {/* 2. Intensity & Depth Sliders */}
+            <div className="dock-section">
+              <div className="dock-section-title">
+                <SlidersHorizontal size={12} color="#70e2ff" />
+                <span>INTENSITY & DEPTH</span>
+              </div>
+              <div className="side-slider-row">
+                <div className="side-slider-header">
+                  <span>Data Opacity</span>
+                  <b>{Math.round(overlayStrength * 100)}%</b>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={overlayStrength}
+                  onChange={(e) => setOverlayStrength(parseFloat(e.target.value))}
+                  title="Adjust data layer opacity (0% = Pure Satellite Earth, 100% = Full Data)"
+                />
+              </div>
+              <div className="side-slider-row">
+                <div className="side-slider-header">
+                  <span>Water Column Depth</span>
+                  <b>{depth === 0 ? 'Surface (0m)' : `${depth.toLocaleString()} m`}</b>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="5000"
+                  step="25"
+                  value={depth}
+                  onChange={(e) => setDepth(Number(e.target.value))}
+                  title="Select water column depth layer (0 - 5,000m)"
+                />
+              </div>
+            </div>
+
+            {/* 3. Location & Annotation Toggles (Special spots, islands, etc.) */}
+            <div className="dock-section">
+              <div className="dock-section-title">
+                <MapPin size={12} color="#34d399" />
+                <span>LOCATIONS & ANNOTATIONS</span>
+              </div>
+
               <button
-                className={`var-pill ${variable === 'temperature' ? 'active' : ''}`}
-                onClick={() => {
-                  setVariable('temperature')
-                  if (mode === 'currents') setMode('explore')
-                }}
-                title="cmocean thermal: SST & Thermocline"
+                className={`dock-toggle-item ${showSpecialSpots ? 'active' : ''}`}
+                onClick={() => setShowSpecialSpots((v) => !v)}
+                title="Toggle Special Ocean Spots & Upwellings (Oman, Java Trench, Sunda, etc.)"
               >
-                <Thermometer size={13} />
-                <span>Thermal</span>
-                <i style={{ color: '#ff6b4a' }} />
+                <div className="toggle-left">
+                  <Sparkles size={13} color={showSpecialSpots ? '#10b981' : '#94a3b8'} />
+                  <span>Special Spots</span>
+                </div>
+                <span className={`status-pill ${showSpecialSpots ? 'on' : 'off'}`}>
+                  {showSpecialSpots ? 'SHOWN' : 'HIDDEN'}
+                </span>
               </button>
+
               <button
-                className={`var-pill ${variable === 'salinity' ? 'active' : ''}`}
-                onClick={() => {
-                  setVariable('salinity')
-                  if (mode === 'currents') setMode('explore')
-                }}
-                title="cmocean haline: Arabian Evaporation Basin vs Bengal River Plumes"
+                className={`dock-toggle-item ${showIslandLabels ? 'active' : ''}`}
+                onClick={() => setShowIslandLabels((v) => !v)}
+                title="Toggle Island Badges & Targets (Lakshadweep, Andaman, Nicobar, Maldives)"
               >
-                <Droplets size={13} />
-                <span>Salinity</span>
-                <i style={{ color: '#5ce5d5' }} />
+                <div className="toggle-left">
+                  <MapPin size={13} color={showIslandLabels ? '#00f2fe' : '#94a3b8'} />
+                  <span>Island Badges</span>
+                </div>
+                <span className={`status-pill ${showIslandLabels ? 'on' : 'off'}`}>
+                  {showIslandLabels ? 'SHOWN' : 'HIDDEN'}
+                </span>
               </button>
+
               <button
-                className={`var-pill ${variable === 'chlorophyll' ? 'active' : ''}`}
-                onClick={() => {
-                  setVariable('chlorophyll')
-                  if (mode === 'currents') setMode('explore')
-                }}
-                title="NASA alga: Coastal Upwelling Blooms vs Oligotrophic Desert"
+                className={`dock-toggle-item ${showVectorBorders ? 'active' : ''}`}
+                onClick={() => setShowVectorBorders((v) => !v)}
+                title="Toggle 1:10m Vector Coastlines & Sovereign Borders"
               >
-                <Activity size={13} />
-                <span>Chlorophyll</span>
-                <i style={{ color: '#7cd362' }} />
+                <div className="toggle-left">
+                  <Compass size={13} color={showVectorBorders ? '#38bdf8' : '#94a3b8'} />
+                  <span>Vector Borders</span>
+                </div>
+                <span className={`status-pill ${showVectorBorders ? 'on' : 'off'}`}>
+                  {showVectorBorders ? 'SHOWN' : 'HIDDEN'}
+                </span>
               </button>
+
               <button
-                className={`var-pill ${variable === 'currents' ? 'active' : ''}`}
-                onClick={() => {
-                  setVariable('currents')
-                  setMode('currents')
-                }}
-                title="cmocean speed: Active Geodesic Streamline Flow"
+                className={`dock-toggle-item ${showGraticule ? 'active' : ''}`}
+                onClick={() => setShowGraticule((v) => !v)}
+                title="Toggle 10° Spherical Lat/Lon Coordinate Grid"
               >
-                <Wind size={13} />
-                <span>Ocean Currents</span>
-                <i style={{ color: '#00f2fe' }} />
+                <div className="toggle-left">
+                  <Globe2 size={13} color={showGraticule ? '#94a3b8' : '#64748b'} />
+                  <span>Lat/Lon Grid</span>
+                </div>
+                <span className={`status-pill ${showGraticule ? 'on' : 'off'}`}>
+                  {showGraticule ? 'SHOWN' : 'HIDDEN'}
+                </span>
               </button>
+
               <button
-                className={`var-pill ${showInstruments ? 'active' : ''}`}
+                className={`dock-toggle-item ${showInstruments ? 'active' : ''}`}
                 onClick={() => setShowInstruments((v) => !v)}
-                title="Toggle Argo floats, BGC-Argo and Glider mission tracks"
+                title="Toggle In-situ Observation Instruments (Argo Floats & Gliders)"
               >
-                <Navigation size={13} />
-                <span>Instruments</span>
-                <i style={{ color: '#ffcf66' }} />
+                <div className="toggle-left">
+                  <Radio size={13} color={showInstruments ? '#fbbf24' : '#94a3b8'} />
+                  <span>Instruments</span>
+                </div>
+                <span className={`status-pill ${showInstruments ? 'on' : 'off'}`}>
+                  {showInstruments ? 'SHOWN' : 'HIDDEN'}
+                </span>
+              </button>
+
+              {/* One-Click Clean View Shortcut */}
+              <button
+                className="clean-view-btn"
+                onClick={() => {
+                  setOverlayStrength(0.0)
+                  setShowSpecialSpots(false)
+                  setShowIslandLabels(false)
+                  setShowInstruments(false)
+                }}
+                title="One click to hide all overlays and location tags for a completely pure globe view"
+              >
+                <Eye size={13} />
+                <span>Pure Clean View</span>
               </button>
             </div>
+          </aside>
 
-            {/* Depth Selector */}
-            <div className="depth-selector">
-              <SlidersHorizontal size={13} color="#70e2ff" />
-              <span>{depth === 0 ? 'Surface' : `${depth.toLocaleString()} m`}</span>
-              <input
-                type="range"
-                min="0"
-                max="5000"
-                step="25"
-                value={depth}
-                onChange={(e) => setDepth(Number(e.target.value))}
-                title="Select depth layer"
-              />
+          {/* RIGHT SIDE DOCK: Timeline Playback, Area Selection & Live Telemetry Inspector */}
+          <aside className="side-dock-right glass" aria-label="Timeline and Region Controls">
+            {/* 1. 25-Year Atlas Timeline */}
+            <div className="dock-section">
+              <div className="dock-section-title">
+                <Clock size={12} color="#00f2fe" />
+                <span>25-YEAR ATLAS TIMELINE</span>
+              </div>
+
+              <div className="timeline-playback-row">
+                <button
+                  className="play-toggle"
+                  onClick={() => setIsPlaying((p) => !p)}
+                  aria-label={isPlaying ? 'Pause' : 'Play'}
+                >
+                  {isPlaying ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
+                </button>
+                <span className="epoch-badge">{formatEpoch(selectedTimestamp)}</span>
+              </div>
+
+              <div className="timeline-slider-wrap-side">
+                <input
+                  type="range"
+                  min="0"
+                  max="299"
+                  value={monthIndex}
+                  onChange={(e) => setSelectedTimestamp(monthIndexToTimestamp(Number(e.target.value)))}
+                  title="Scrub across 25 years (2000 - 2024)"
+                />
+              </div>
+
+              {/* Colorbar Palette */}
+              {overlayStrength > 0 && (
+                <div className="colorbar-wrap-side">
+                  <div className="colorbar-labels">
+                    <span>{palette.range[0]} {palette.unit}</span>
+                    <span>{palette.range[1]} {palette.unit}</span>
+                  </div>
+                  <div
+                    className="colorbar-bar"
+                    style={{
+                      background: `linear-gradient(90deg, ${palette.stops.join(', ')})`,
+                    }}
+                  />
+                  <span className="palette-desc">{palette.name} · {palette.description}</span>
+                </div>
+              )}
             </div>
-          </div>
 
-          <div className="dock-theme-hint">
-            <span>THEME: <b>{palette.name}</b> · {palette.description}</span>
-          </div>
+            {/* 2. Area Selection & Benchmark Presets */}
+            <div className="dock-section">
+              <div className="dock-section-title">
+                <Square size={12} color="#00f2fe" />
+                <span>REGIONAL 3D BOUNDING BOX</span>
+              </div>
 
-          <div className="dock-bottom-row">
-            {/* Play/Pause */}
-            <button
-              className="play-toggle"
-              onClick={() => setIsPlaying((p) => !p)}
-              aria-label={isPlaying ? 'Pause' : 'Play'}
-            >
-              {isPlaying ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
-            </button>
+              <div className="area-select-action-row">
+                <button
+                  className={`draw-toggle-btn ${isSelectingArea ? 'active' : ''}`}
+                  onClick={handleToggleAreaSelection}
+                  title={isSelectingArea ? 'Cancel area selection (Esc)' : 'Draw geographic bounding box on globe'}
+                >
+                  {isSelectingArea ? <X size={13} /> : <Crosshair size={13} />}
+                  <span>{isSelectingArea ? 'Cancel Selection' : 'Select Area'}</span>
+                </button>
+                {activeBoundary && !isSelectingArea && (
+                  <button
+                    className="benchmark-chip"
+                    onClick={() => {
+                      setActiveBoundary(null)
+                      setAnchorCorner(null)
+                      setHoverCorner(null)
+                    }}
+                    title="Clear current area selection"
+                  >
+                    <X size={11} /> Clear
+                  </button>
+                )}
+              </div>
 
-            {/* Timeline Scrubber */}
-            <div className="timeline-slider-wrap">
-              <span className="epoch-badge">{formatEpoch(selectedTimestamp)}</span>
-              <input
-                type="range"
-                min="0"
-                max="299"
-                value={monthIndex}
-                onChange={(e) => setSelectedTimestamp(monthIndexToTimestamp(Number(e.target.value)))}
-                title="Scrub across 25 years (2000 - 2024)"
-              />
+              <div className="side-instructions">
+                {anchorCorner
+                  ? `✦ Corner A: (${anchorCorner.latitude.toFixed(1)}°, ${anchorCorner.longitude.toFixed(1)}°) — Click opposite corner`
+                  : isSelectingArea
+                  ? '✦ Click globe to set first corner (Esc to cancel)'
+                  : activeBoundary
+                  ? `✦ Selected: ${activeBoundary.label || 'Region'} (${activeBoundary.width_km} × ${activeBoundary.height_km} km)`
+                  : '✦ Click \'Select Area\' to draw a 3D bounding box'}
+              </div>
+
+              <div className="benchmark-chips-grid">
+                {BENCHMARK_REGIONS.map((reg) => (
+                  <button
+                    key={reg.id}
+                    className={`benchmark-chip ${activeBoundary?.label === reg.name ? 'active' : ''}`}
+                    onClick={() => handleBenchmarkSelect(reg.boundary)}
+                    title={reg.subtitle}
+                  >
+                    {reg.name.split('&')[0].trim()}
+                  </button>
+                ))}
+              </div>
+
+              {activeBoundary && boundaryContainsMarine(activeBoundary) && (
+                <button
+                  className="dive-now-btn"
+                  style={{ marginTop: '8px' }}
+                  onClick={() => {
+                    setMode('dive')
+                    setIsTsunamiPlaying(false)
+                  }}
+                  title="Enter 3D Digital Twin Block with true ETOPO bathymetry"
+                >
+                  <Navigation size={13} />
+                  <span>3D Deep Dive ({activeBoundary.width_km} × {activeBoundary.height_km} km)</span>
+                </button>
+              )}
             </div>
 
-            {/* Colorbar */}
-            <div className="colorbar-wrap">
-              <span>{palette.range[0]}</span>
-              <div
-                className="colorbar-bar"
-                style={{
-                  background: `linear-gradient(90deg, ${palette.stops.join(', ')})`,
-                }}
-              />
-              <span>
-                {palette.range[1]} {palette.unit}
-              </span>
-            </div>
-          </div>
-        </footer>
+            {/* 3. Live Coordinate Telemetry Inspector */}
+            {telemetry && (
+              <div className="dock-section">
+                <div className="dock-section-title">
+                  <Compass size={12} color="#70e2ff" />
+                  <span>TELEMETRY INSPECTOR</span>
+                </div>
+
+                <div className="telemetry-compact-grid">
+                  <div className="tel-item">
+                    <label>COORDINATE</label>
+                    <span>
+                      {Math.abs(selection.latitude).toFixed(2)}°{selection.latitude >= 0 ? 'N' : 'S'},{' '}
+                      {Math.abs(selection.longitude).toFixed(2)}°{selection.longitude >= 0 ? 'E' : 'W'}
+                    </span>
+                  </div>
+                  <div className="tel-item">
+                    <label>SEABED</label>
+                    <span>{Math.round(telemetry.seabed_depth_m).toLocaleString()} m</span>
+                  </div>
+                  <div className="tel-item">
+                    <label>SST / TEMP</label>
+                    <span>{telemetry.temperature_c.toFixed(1)}°C</span>
+                  </div>
+                  <div className="tel-item">
+                    <label>SALINITY</label>
+                    <span>{telemetry.salinity_psu.toFixed(1)} PSU</span>
+                  </div>
+                  {telemetry.current_speed_m_s !== undefined && (
+                    <div className="tel-item" style={{ gridColumn: 'span 2' }}>
+                      <label>SURFACE CURRENT</label>
+                      <span>{telemetry.current_speed_m_s.toFixed(2)} m/s ({compass.label})</span>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  className="view-profile-btn"
+                  onClick={() => setProfileOpen(true)}
+                  title="Open full depth profile curve modal"
+                >
+                  <Activity size={12} /> View CTD Depth Profile
+                </button>
+              </div>
+            )}
+          </aside>
+        </>
       )}
 
       {/* Collapsible Depth Profile Drawer / Modal */}

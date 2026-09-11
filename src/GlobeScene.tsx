@@ -34,6 +34,7 @@ import type {
 } from './types'
 import OceanCurrentFlow from './OceanCurrentFlow'
 import GlobeAreaSelector from './GlobeAreaSelector'
+import { VectorGlobeOverlays } from './VectorGlobeOverlays'
 
 const RADIUS = GLOBE_RADIUS
 const EARTH_DAY_MAP = '/data/earth_day_4096.jpg'
@@ -808,9 +809,9 @@ function OceanShader({
                     isDataValid = true;
                   }
                 } else if (uVariable < 1.5) {
-                  // Salinity: 30-37 PSU typical; cubes use 0.0 on land
+                  // Salinity: 30.5 to 37.5 PSU typical; full dynamic range from Bengal fresh plume to Arabian Sea
                   if (val > 10.0) {
-                    float normS = clamp((val - 31.0) / 6.0, 0.0, 1.0);
+                    float normS = clamp((val - 30.5) / 7.0, 0.0, 1.0);
                     sliceColor = paletteHaline(normS);
                     isDataValid = true;
                   }
@@ -868,17 +869,13 @@ function OceanShader({
             } else {
               dataColor = globalBaseColor * (0.65 + light * 0.60);
             }
-            vec3 litOcean = mix(earth, dataColor, uOverlayStrength);
+            vec3 naturalShadedEarth = earth * (0.50 + light * 0.50);
+            vec3 litOcean = mix(naturalShadedEarth, dataColor, uOverlayStrength);
 
-            // Authoritative land/ocean masking:
-            // In the Indian Ocean domain, the physical NOAA OISST mask takes precedence.
-            // When an inland/coastal coordinate is land according to OISST (oisstOcean < 0.5),
-            // water is strictly forced to 0.0 so that satellite earth imagery is preserved
-            // and the procedural thermal baseline is NEVER revealed over land (e.g. Rann of Kutch).
+            // High-resolution antialiased coastline:
+            // The visual shoreline is strictly governed by the high-resolution sub-pixel
+            // water mask so coastlines are razor-sharp, natural, and never pixelated into 28km blocks.
             float finalWater = water;
-            if (uHasOisstMask > 0.5 && inOisstDomain) {
-              finalWater = (oisstOcean > 0.5) ? water : 0.0;
-            }
 
             // Clean land masking with zero color bleed
             gl_FragColor = vec4(mix(earth * (0.50 + light * 0.50), litOcean, finalWater), 1.0);
@@ -1723,6 +1720,10 @@ export interface GlobeSceneProps {
   activeBoundary?: SpatialBoundary | null
   anchorCorner?: { latitude: number; longitude: number } | null
   hoverCorner?: { latitude: number; longitude: number } | null
+  showVectorBorders?: boolean
+  showGraticule?: boolean
+  showIslandLabels?: boolean
+  showHotspots?: boolean
   onInstrument: (instrument: Instrument) => void
   onSelectPoint?: (selection: Selection) => void
   onSelectStation?: (station: CoastalStation) => void
@@ -1791,6 +1792,10 @@ function Scene({
   activeBoundary = null,
   anchorCorner = null,
   hoverCorner = null,
+  showVectorBorders = true,
+  showGraticule = true,
+  showIslandLabels = true,
+  showHotspots = false,
   onInstrument,
   onSelectPoint,
   onSelectStation,
@@ -1865,20 +1870,17 @@ function Scene({
           </mesh>
         )}
 
-        {/* Latitude circles */}
-        {[-30, 0, 30].map((lat) => (
-          <Line
-            key={lat}
-            points={Array.from({ length: 73 }, (_, i) => latLngToVector3(lat, -180 + i * 5, RADIUS + 0.012))}
-            color="#c1eaff"
-            lineWidth={0.28}
-            transparent
-            opacity={0.14}
-          />
-        ))}
+        {/* High-Precision Natural Earth Vector Overlays (Coastlines, International Borders, Coral Atolls/Islands & Lat/Lon Graticule) */}
+        <VectorGlobeOverlays
+          showCoastlines={showVectorBorders}
+          showBorders={showVectorBorders}
+          showIslands={showVectorBorders}
+          showGraticule={showGraticule}
+          showIslandLabels={showIslandLabels}
+        />
 
-        {/* Indian Ocean Digital Twin Observation Boundary [20°E-125°E, 45°S-32°N] */}
-        <IndianOceanSectorBoundary />
+        {/* Indian Ocean Digital Twin Observation Boundary [20°E-125°E, 45°S-32°N] (shown only when data overlay active) */}
+        {overlayStrength > 0.1 && !isTsunamiActive && <IndianOceanSectorBoundary />}
 
         {/* Continuous Fluid Ocean Flow: Smooth Curved Streamlines & Luminous Advected Particles */}
         <OceanCurrentFlow
@@ -1914,7 +1916,7 @@ function Scene({
             <Marker key={instrument.id} instrument={instrument} onSelect={onInstrument} />
           ))}
         {/* 18 Curated Biological Upwelling & Trench Hotspots Beacons */}
-        {!isTsunamiActive && (mode === 'explore' || mode === 'currents') &&
+        {showHotspots && !isTsunamiActive && (mode === 'explore' || mode === 'currents') &&
           OCEAN_HOTSPOTS.map((spot) => (
             <GlobeHotspotMarker
               key={spot.id}
