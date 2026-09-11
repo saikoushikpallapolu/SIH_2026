@@ -52,7 +52,7 @@ import {
   monthIndexToTimestamp,
   resolveDatasetTimestamp,
 } from './oceanDataEngine'
-import type { CoastalStation, CurrentSystem, Instrument, OceanVariable, Selection, SpatialBoundary, TsunamiScenario, ViewMode } from './types'
+import { DEPTH_LEVELS, type CoastalStation, type CurrentSystem, type Instrument, type OceanVariable, type Selection, type SpatialBoundary, type TsunamiScenario, type ViewMode } from './types'
 
 // Checks whether an arbitrary geographic boundary encloses any ocean / marine cells
 function boundaryContainsMarine(boundary: SpatialBoundary): boolean {
@@ -473,99 +473,7 @@ export default function App() {
         )}
       </div>
 
-      {/* Minimalist Topbar */}
-      {!zenMode && (
-        <header className="topbar glass">
-          <div className="brand">
-            <span className="brand-mark">
-              <Waves size={16} />
-            </span>
-            <span>
-              Ocean<span>Scope</span>
-            </span>
-            <small>INDIA</small>
-          </div>
 
-          <div className="nav-center">
-            <button
-              className={mode === 'explore' ? 'active' : ''}
-              onClick={() => {
-                setMode('explore')
-                setIsTsunamiPlaying(false)
-              }}
-            >
-              <Globe2 size={14} /> Globe
-            </button>
-            <button
-              className={mode === 'tsunami' ? 'active' : ''}
-              onClick={() => {
-                setMode('tsunami')
-                setIsPlaying(false)
-                setIsTsunamiPlaying(true)
-                setSelection({ latitude: activeScenario.epicenter.latitude, longitude: activeScenario.epicenter.longitude })
-                setTeleportNonce(Date.now())
-              }}
-            >
-              <Radio size={14} /> Tsunami Visualisation
-            </button>
-            <button
-              className={`${mode === 'dive' ? 'active' : ''} ${!boundaryContainsMarine(diveBoundary) ? 'disabled-btn' : ''}`}
-              onClick={() => {
-                if (!boundaryContainsMarine(diveBoundary)) return
-                setMode('dive')
-                setIsTsunamiPlaying(false)
-              }}
-              disabled={!boundaryContainsMarine(diveBoundary)}
-              title={
-                boundaryContainsMarine(diveBoundary)
-                  ? "Regional 3D Deep Dive (NOAA GODAS 3D & ETOPO Bathymetry)"
-                  : "Selected region is completely inland. Please select a marine or coastal region to dive."
-              }
-            >
-              <Compass size={14} /> 3D Deep Dive
-            </button>
-            <button
-              className={hotspotsOpen ? 'active' : ''}
-              onClick={() => setHotspotsOpen((v) => !v)}
-              title="Browse 18 Curated Biological Upwellings, Deep Trenches & Coral Atolls"
-            >
-              <Sparkles size={14} color="#10b981" /> Hotspots
-            </button>
-          </div>
-
-          <div className="topbar-actions">
-            {mode === 'tsunami' ? (
-              <div className="status-badge alert">
-                <span className="pulse red" />
-                <span>{activeScenario.shortName.toUpperCase()} PROPAGATION</span>
-              </div>
-            ) : mode === 'currents' ? (
-              <div className="status-badge currents">
-                <span className="pulse cyan" />
-                <span>GEOSTROPHIC & JET CURRENTS</span>
-              </div>
-            ) : mode === 'dive' ? (
-              <div className="status-badge currents">
-                <span className="pulse cyan" />
-                <span>3D DIGITAL TWIN · ETOPO 2022</span>
-              </div>
-            ) : (
-              <div className="status-badge">
-                <span className="pulse" />
-                <span>25-YR ATLAS</span>
-              </div>
-            )}
-            <button
-              className="icon-btn"
-              onClick={() => setZenMode(true)}
-              title="Zen Mode (Hide UI)"
-              aria-label="Hide UI"
-            >
-              <EyeOff size={15} />
-            </button>
-          </div>
-        </header>
-      )}
 
       {/* Zen Mode Unhide Button */}
       {zenMode && (
@@ -586,7 +494,7 @@ export default function App() {
         <aside className="currents-probe-card glass">
           <div className="probe-header">
             <div className="probe-title">
-              <Wind size={15} color="#00f2fe" />
+              <Wind size={15} color="#ffffff" />
               <span>CURRENT VELOCITY & BEARING</span>
             </div>
             <div className="subgrid-coords-compact">
@@ -720,10 +628,86 @@ export default function App() {
       {/* 3. TSUNAMI MODE: Dedicated Scenario-Driven Telemetry & Station Impact HUD */}
       {!zenMode && mode === 'tsunami' && (
         <aside className="tsunami-telemetry-card glass">
+          {/* Brand Header & Zen View Toggle */}
+          <div className="dock-brand-header">
+            <div className="brand">
+              <span className="brand-mark">
+                <Waves size={15} />
+              </span>
+              <span className="brand-text">
+                OceanScope
+              </span>
+              <small className="brand-badge">INDIA</small>
+            </div>
+            <button
+              className="zen-btn"
+              onClick={() => setZenMode(true)}
+              title="Zen Mode (Hide UI)"
+              aria-label="Hide UI"
+            >
+              <EyeOff size={13} />
+            </button>
+          </div>
+
+          {/* Mode Navigation Buttons (Monochrome Black & White) */}
+          <div className="dock-nav-grid">
+            <button
+              className="nav-mode-btn"
+              onClick={() => {
+                setMode('explore')
+                setHotspotsOpen(false)
+                setIsTsunamiPlaying(false)
+              }}
+            >
+              <Globe2 size={13} />
+              <span>Globe</span>
+            </button>
+            <button
+              className="nav-mode-btn active"
+              onClick={() => {
+                setMode('tsunami')
+                setHotspotsOpen(false)
+                setIsPlaying(false)
+                setIsTsunamiPlaying(true)
+                setSelection({ latitude: activeScenario.epicenter.latitude, longitude: activeScenario.epicenter.longitude })
+                setTeleportNonce(Date.now())
+              }}
+            >
+              <Radio size={13} />
+              <span>Tsunami</span>
+            </button>
+            <button
+              className={`nav-mode-btn ${!boundaryContainsMarine(diveBoundary) ? 'disabled-btn' : ''}`}
+              onClick={() => {
+                if (!boundaryContainsMarine(diveBoundary)) return
+                setMode('dive')
+                setHotspotsOpen(false)
+                setIsTsunamiPlaying(false)
+              }}
+              disabled={!boundaryContainsMarine(diveBoundary)}
+              title={
+                boundaryContainsMarine(diveBoundary)
+                  ? "Regional 3D Deep Dive"
+                  : "Selected region is inland."
+              }
+            >
+              <Compass size={13} />
+              <span>3D Dive</span>
+            </button>
+            <button
+              className={`nav-mode-btn ${hotspotsOpen ? 'active' : ''}`}
+              onClick={() => setHotspotsOpen((v) => !v)}
+              title="Browse 18 Curated Biological Upwellings, Deep Trenches & Coral Atolls"
+            >
+              <Sparkles size={13} />
+              <span>Hotspots</span>
+            </button>
+          </div>
+
           {/* Scenario Selector Dropdown */}
           <div className="tsunami-scenario-selector-wrap">
             <div className="scenario-selector-label">
-              <SlidersHorizontal size={13} color="#00e5ff" />
+              <SlidersHorizontal size={13} color="#ffffff" />
               <span>SELECT TSUNAMI PROPAGATION SCENARIO:</span>
             </div>
             <select
@@ -742,7 +726,7 @@ export default function App() {
 
           <div className="tsunami-header">
             <div className="tsunami-title">
-              <Radio size={16} color="#ff3d00" />
+              <Radio size={16} color="#ffffff" />
               <div>
                 <strong>{activeScenario.title.toUpperCase()}</strong>
                 <span>{activeScenario.origin_time_label}</span>
@@ -762,10 +746,10 @@ export default function App() {
                   fontSize: 10,
                   padding: '4px 8px',
                   borderRadius: 6,
-                  color: '#00e5ff',
-                  border: '1px solid rgba(0, 229, 255, 0.25)',
+                  color: '#ffffff',
+                  border: '1px solid rgba(255, 255, 255, 0.25)',
                   cursor: 'pointer',
-                  background: 'rgba(0, 229, 255, 0.08)'
+                  background: '#000000'
                 }}
                 title="Recenter camera on Indian Ocean basin & epicenter"
               >
@@ -1085,19 +1069,19 @@ export default function App() {
             title="Return to 3D Globe"
             style={{
               position: 'absolute',
-              top: '80px',
-              left: '24px',
+              top: '20px',
+              left: '20px',
               zIndex: 30,
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
               padding: '10px 16px',
               borderRadius: '10px',
-              color: '#00f2fe',
-              background: 'rgba(4, 18, 32, 0.85)',
-              border: '1px solid rgba(0, 242, 254, 0.4)',
+              color: '#000000',
+              background: '#ffffff',
+              border: '1px solid #ffffff',
               cursor: 'pointer',
-              fontWeight: 600,
+              fontWeight: 700,
               fontSize: '12px',
             }}
           >
@@ -1111,10 +1095,86 @@ export default function App() {
         <>
           {/* LEFT SIDE DOCK: Ocean Layers, Intensity/Depth Sliders & Map Annotation Toggles */}
           <aside className="side-dock-left glass" aria-label="Layers and Display Controls">
+            {/* Brand Header & Zen View Toggle */}
+            <div className="dock-brand-header">
+              <div className="brand">
+                <span className="brand-mark">
+                  <Waves size={15} />
+                </span>
+                <span className="brand-text">
+                  OceanScope
+                </span>
+                <small className="brand-badge">INDIA</small>
+              </div>
+              <button
+                className="zen-btn"
+                onClick={() => setZenMode(true)}
+                title="Zen Mode (Hide UI)"
+                aria-label="Hide UI"
+              >
+                <EyeOff size={13} />
+              </button>
+            </div>
+
+            {/* Mode Navigation Buttons (Monochrome Black & White) */}
+            <div className="dock-nav-grid">
+              <button
+                className={`nav-mode-btn ${mode === 'explore' && !hotspotsOpen ? 'active' : ''}`}
+                onClick={() => {
+                  setMode('explore')
+                  setHotspotsOpen(false)
+                  setIsTsunamiPlaying(false)
+                }}
+              >
+                <Globe2 size={13} />
+                <span>Globe</span>
+              </button>
+              <button
+                className="nav-mode-btn"
+                onClick={() => {
+                  setMode('tsunami')
+                  setHotspotsOpen(false)
+                  setIsPlaying(false)
+                  setIsTsunamiPlaying(true)
+                  setSelection({ latitude: activeScenario.epicenter.latitude, longitude: activeScenario.epicenter.longitude })
+                  setTeleportNonce(Date.now())
+                }}
+              >
+                <Radio size={13} />
+                <span>Tsunami</span>
+              </button>
+              <button
+                className={`nav-mode-btn ${mode === 'dive' ? 'active' : ''} ${!boundaryContainsMarine(diveBoundary) ? 'disabled-btn' : ''}`}
+                onClick={() => {
+                  if (!boundaryContainsMarine(diveBoundary)) return
+                  setMode('dive')
+                  setHotspotsOpen(false)
+                  setIsTsunamiPlaying(false)
+                }}
+                disabled={!boundaryContainsMarine(diveBoundary)}
+                title={
+                  boundaryContainsMarine(diveBoundary)
+                    ? "Regional 3D Deep Dive"
+                    : "Selected region is inland."
+                }
+              >
+                <Compass size={13} />
+                <span>3D Dive</span>
+              </button>
+              <button
+                className={`nav-mode-btn ${hotspotsOpen ? 'active' : ''}`}
+                onClick={() => setHotspotsOpen((v) => !v)}
+                title="Browse 18 Curated Biological Upwellings, Deep Trenches & Coral Atolls"
+              >
+                <Sparkles size={13} />
+                <span>Hotspots</span>
+              </button>
+            </div>
+
             {/* 1. Scientific Variables & Natural Earth Mode */}
             <div className="dock-section">
               <div className="dock-section-title">
-                <Layers3 size={12} color="#00f2fe" />
+                <Layers3 size={12} color="#ffffff" />
                 <span>OCEAN LAYERS</span>
               </div>
               <div className="vertical-var-pills">
@@ -1127,7 +1187,7 @@ export default function App() {
                     <Globe2 size={13} />
                     <span>Natural Earth</span>
                   </div>
-                  <i style={{ color: '#4fc3f7' }} />
+                  <i style={{ color: '#ffffff' }} />
                 </button>
                 <button
                   className={`var-pill ${variable === 'temperature' && overlayStrength > 0 ? 'active' : ''}`}
@@ -1142,7 +1202,7 @@ export default function App() {
                     <Thermometer size={13} />
                     <span>Thermal (SST)</span>
                   </div>
-                  <i style={{ color: '#ff6b4a' }} />
+                  <i style={{ color: '#ffffff' }} />
                 </button>
                 <button
                   className={`var-pill ${variable === 'salinity' && overlayStrength > 0 ? 'active' : ''}`}
@@ -1157,7 +1217,7 @@ export default function App() {
                     <Droplets size={13} />
                     <span>Salinity</span>
                   </div>
-                  <i style={{ color: '#5ce5d5' }} />
+                  <i style={{ color: '#ffffff' }} />
                 </button>
                 <button
                   className={`var-pill ${variable === 'chlorophyll' && overlayStrength > 0 ? 'active' : ''}`}
@@ -1172,7 +1232,7 @@ export default function App() {
                     <Sparkles size={13} />
                     <span>Chlorophyll</span>
                   </div>
-                  <i style={{ color: '#7cd362' }} />
+                  <i style={{ color: '#ffffff' }} />
                 </button>
                 <button
                   className={`var-pill ${variable === 'currents' && overlayStrength > 0 ? 'active' : ''}`}
@@ -1187,7 +1247,7 @@ export default function App() {
                     <Wind size={13} />
                     <span>Ocean Currents</span>
                   </div>
-                  <i style={{ color: '#00f2fe' }} />
+                  <i style={{ color: '#ffffff' }} />
                 </button>
               </div>
             </div>
@@ -1195,7 +1255,7 @@ export default function App() {
             {/* 2. Intensity & Depth Sliders */}
             <div className="dock-section">
               <div className="dock-section-title">
-                <SlidersHorizontal size={12} color="#70e2ff" />
+                <SlidersHorizontal size={12} color="#ffffff" />
                 <span>INTENSITY & DEPTH</span>
               </div>
               <div className="side-slider-row">
@@ -1210,31 +1270,32 @@ export default function App() {
                   step="0.05"
                   value={overlayStrength}
                   onChange={(e) => setOverlayStrength(parseFloat(e.target.value))}
-                  title="Adjust data layer opacity (0% = Pure Satellite Earth, 100% = Full Data)"
+                  title="Adjust ocean data overlay transparency"
                 />
               </div>
+
               <div className="side-slider-row">
                 <div className="side-slider-header">
-                  <span>Water Column Depth</span>
-                  <b>{depth === 0 ? 'Surface (0m)' : `${depth.toLocaleString()} m`}</b>
+                  <span>Depth Level</span>
+                  <b>{depth === 0 ? 'Surface (0m)' : `${depth}m`}</b>
                 </div>
                 <input
                   type="range"
                   min="0"
-                  max="5000"
-                  step="25"
-                  value={depth}
-                  onChange={(e) => setDepth(Number(e.target.value))}
-                  title="Select water column depth layer (0 - 5,000m)"
+                  max="15"
+                  step="1"
+                  value={(DEPTH_LEVELS as readonly number[]).indexOf(depth) >= 0 ? (DEPTH_LEVELS as readonly number[]).indexOf(depth) : 0}
+                  onChange={(e) => setDepth(DEPTH_LEVELS[parseInt(e.target.value, 10)] ?? 0)}
+                  title="Scrub vertical 3D depth layer (0m - 1000m)"
                 />
               </div>
             </div>
 
-            {/* 3. Location & Annotation Toggles (Special spots, islands, etc.) */}
+            {/* 3. High-Precision Map Annotation Toggles */}
             <div className="dock-section">
               <div className="dock-section-title">
-                <MapPin size={12} color="#34d399" />
-                <span>LOCATIONS & ANNOTATIONS</span>
+                <Globe2 size={12} color="#ffffff" />
+                <span>MAP OVERLAYS</span>
               </div>
 
               <button
@@ -1243,7 +1304,7 @@ export default function App() {
                 title="Toggle Special Ocean Spots & Upwellings (Oman, Java Trench, Sunda, etc.)"
               >
                 <div className="toggle-left">
-                  <Sparkles size={13} color={showSpecialSpots ? '#10b981' : '#94a3b8'} />
+                  <Sparkles size={13} color={showSpecialSpots ? '#ffffff' : '#94a3b8'} />
                   <span>Special Spots</span>
                 </div>
                 <span className={`status-pill ${showSpecialSpots ? 'on' : 'off'}`}>
@@ -1257,7 +1318,7 @@ export default function App() {
                 title="Toggle Island Badges & Targets (Lakshadweep, Andaman, Nicobar, Maldives)"
               >
                 <div className="toggle-left">
-                  <MapPin size={13} color={showIslandLabels ? '#00f2fe' : '#94a3b8'} />
+                  <MapPin size={13} color={showIslandLabels ? '#ffffff' : '#94a3b8'} />
                   <span>Island Badges</span>
                 </div>
                 <span className={`status-pill ${showIslandLabels ? 'on' : 'off'}`}>
@@ -1271,7 +1332,7 @@ export default function App() {
                 title="Toggle 1:10m Vector Coastlines & Sovereign Borders"
               >
                 <div className="toggle-left">
-                  <Compass size={13} color={showVectorBorders ? '#38bdf8' : '#94a3b8'} />
+                  <Compass size={13} color={showVectorBorders ? '#ffffff' : '#94a3b8'} />
                   <span>Vector Borders</span>
                 </div>
                 <span className={`status-pill ${showVectorBorders ? 'on' : 'off'}`}>
@@ -1285,7 +1346,7 @@ export default function App() {
                 title="Toggle 10° Spherical Lat/Lon Coordinate Grid"
               >
                 <div className="toggle-left">
-                  <Globe2 size={13} color={showGraticule ? '#94a3b8' : '#64748b'} />
+                  <Globe2 size={13} color={showGraticule ? '#ffffff' : '#64748b'} />
                   <span>Lat/Lon Grid</span>
                 </div>
                 <span className={`status-pill ${showGraticule ? 'on' : 'off'}`}>
@@ -1299,7 +1360,7 @@ export default function App() {
                 title="Toggle In-situ Observation Instruments (Argo Floats & Gliders)"
               >
                 <div className="toggle-left">
-                  <Radio size={13} color={showInstruments ? '#fbbf24' : '#94a3b8'} />
+                  <Radio size={13} color={showInstruments ? '#ffffff' : '#94a3b8'} />
                   <span>Instruments</span>
                 </div>
                 <span className={`status-pill ${showInstruments ? 'on' : 'off'}`}>
@@ -1329,7 +1390,7 @@ export default function App() {
             {/* 1. 25-Year Atlas Timeline */}
             <div className="dock-section">
               <div className="dock-section-title">
-                <Clock size={12} color="#00f2fe" />
+                <Clock size={12} color="#ffffff" />
                 <span>25-YEAR ATLAS TIMELINE</span>
               </div>
 
@@ -1376,7 +1437,7 @@ export default function App() {
             {/* 2. Area Selection & Benchmark Presets */}
             <div className="dock-section">
               <div className="dock-section-title">
-                <Square size={12} color="#00f2fe" />
+                <Square size={12} color="#ffffff" />
                 <span>REGIONAL 3D BOUNDING BOX</span>
               </div>
 
@@ -1447,7 +1508,7 @@ export default function App() {
             {telemetry && (
               <div className="dock-section">
                 <div className="dock-section-title">
-                  <Compass size={12} color="#70e2ff" />
+                  <Compass size={12} color="#ffffff" />
                   <span>TELEMETRY INSPECTOR</span>
                 </div>
 
