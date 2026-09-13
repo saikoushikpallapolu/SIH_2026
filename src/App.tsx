@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import GlobeScene from './GlobeScene'
 import ImmersiveOcean, { type DiveTelemetry } from './ImmersiveOcean'
+import PoseidonChat from './PoseidonChat'
 import catalogData from '../data/processed/observations/instruments_catalog.json'
 import type { Instrument as CatalogInstrument } from './types'
 const instruments = catalogData as CatalogInstrument[]
@@ -1679,6 +1680,9 @@ export default function App() {
           </div>
         </aside>
       )}
+
+      {/* Poseidon 4D Ocean Intelligence Chatbot */}
+      <PoseidonChat />
     </main>
   )
 }

@@ -5,16 +5,53 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+import os
+import logging
+import traceback
+
+logger = logging.getLogger("oceanscope")
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from functools import lru_cache
 import struct
-from scipy import ndimage
+
+try:
+    from scipy import ndimage
+except ImportError:
+    ndimage = None
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# Zero-dependency .env loader so the server runs even before python-dotenv is installed
+def _load_env_file(filepath: Path) -> None:
+    if filepath.exists():
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+_load_env_file(ROOT / ".env")
+_load_env_file(ROOT / "backend" / ".env")
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    load_dotenv(ROOT / "backend" / ".env")
+except ImportError:
+    pass
+
 PROCESSED_DIR = ROOT / "data" / "processed"
 CUBES_DIR = PROCESSED_DIR / "cubes"
 TERRAIN_DIR = PROCESSED_DIR / "terrain"
@@ -32,7 +69,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -1873,3 +1910,569 @@ def ocean_profile(
         },
     }
 
+
+# ---------------------------------------------------------------------------
+# Poseidon AI Chatbot — Gemini-Powered Data-Grounded Chat Endpoint
+# ---------------------------------------------------------------------------
+
+logger = logging.getLogger("poseidon_chat")
+
+# Load .env for GEMINI_API_KEY
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
+
+
+class ChatMessage(BaseModel):
+    role: str  # 'user' or 'assistant'
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[ChatMessage] = []
+
+
+POSEIDON_SYSTEM_PROMPT = """
+You are **Poseidon**, the divine AI assistant of **OceanScope India** — a 4D Digital Twin
+of the Indian Ocean built for Smart India Hackathon 2026. You are the Greek God of the Sea,
+wise, powerful, and deeply knowledgeable about all things oceanic.
+
+Your personality:
+- Speak with authority but warmth, like a wise ancient god who genuinely wants to help
+- Use occasional ocean metaphors ("Let me dive into that...", "The currents of data reveal...")
+- Keep responses concise (2-4 paragraphs max) unless the user asks for detail
+- When presenting data, use specific numbers with units
+- NEVER make up data — only report what the query_ocean_data function returns
+- If you cannot answer, say so honestly
+
+## OceanScope India System Knowledge
+
+### What Is OceanScope India?
+A high-performance 4D Digital Twin of the Indian Ocean (20°E → 125°E, -45°S → 32°N)
+featuring 25 years (Jan 2000 – Dec 2024) of multimodal oceanographic data, sub-grid
+coordinate inspection, dual-scale seafloor bathymetry, 3D underwater dive visualization,
+and historic extreme events like the 2004 Sumatra Tsunami.
+
+### Data Variables (5 core variables)
+1. **Temperature** (°C) — Sea surface to 5000m depth, real NOAA OISST daily (2020-2024) + GODAS 3D monthly
+2. **Salinity** (PSU) — Practical Salinity Units across 16 depth levels
+3. **Chlorophyll-a** (mg/m³) — Marine phytoplankton concentration, real ESA OC-CCI (1998-2025)
+4. **Ocean Currents** (m/s) — Zonal (U) and Meridional (V) velocity components
+5. **Bathymetry** — NOAA ETOPO 2022 seafloor elevation at 0.25° resolution
+
+### Grid Specification
+- Spatial: 309 rows × 421 columns (0.25° resolution)
+- Latitude: -44.99°S to 32.01°N
+- Longitude: 20.01°E to 125.01°E  
+- Depth levels (16): 0, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000 meters
+- Temporal: 300 monthly timesteps (month index 0 = Jan 2000, index 299 = Dec 2024)
+
+### Real Verified Data Sources
+- **NOAA OISST v2.1**: Daily SST, 2020-01-01 to 2024-12-31 (1,827 daily slices)
+- **NOAA GODAS 3D**: Monthly temperature, salinity, currents, density (2022-01 to 2024-12, 36 months)
+- **ESA OC-CCI v6**: Monthly chlorophyll-a (1998-01 to 2025-01, 325 monthly slices)
+- **NOAA ETOPO 2022**: Bedrock elevation at 60-arcsecond resolution
+
+### Named Ocean Basins & Regions
+The system can identify 20+ marine regions: Arabian Sea, Bay of Bengal, Red Sea,
+Persian Gulf, Gulf of Aden, Andaman Sea, Mozambique Channel, Agulhas Retroflection,
+Somali Current Upwelling, Java/Sunda Trench, Ninety East Ridge, Central Indian Basin,
+Southwest Indian Ridge, Southern Indian Ocean, Equatorial Indian Ocean, and more.
+
+### User Interface Modes
+1. **Explore Mode** — Interactive 3D globe with data overlays, sub-grid telemetry HUD,
+   depth slider, time scrubber, variable selector, instrument markers
+2. **Currents Mode** — Animated ocean current flow visualization with streamlines,
+   particles, vector arrows, and named current system labels
+3. **Tsunami Mode** — Historical tsunami shockwave simulation (2004 Sumatra event)
+   with isochrone propagation, coastal impact stations, and satellite flyover data
+4. **Dive Mode** — Immersive 3D underwater experience with seabed terrain,
+   fish schooling, CTD profile display, and real-time depth telemetry
+5. **Analysis Mode** — Vertical cross-section transects and calibration tools
+
+### How to Use the System
+- **Click anywhere on the globe** to inspect sub-grid oceanographic data at that coordinate
+- **Depth slider** (left panel) adjusts viewing depth from surface to 5000m
+- **Time scrubber** (bottom) animates through 25 years of monthly data
+- **Variable selector** (top-left) switches between Temperature, Salinity, Chlorophyll, Currents
+- **Overlay strength** slider controls data visualization intensity on the globe
+- **Dive button** launches immersive underwater 3D experience at selected coordinates
+- **Area selection** tool lets you draw bounding boxes for regional deep-dive analysis
+- **Hotspots panel** provides curated locations of oceanographic interest
+- **Instrument panel** shows Argo floats and BGC-Argo sensors in the Indian Ocean
+
+### Key Oceanographic Facts for Context
+- Indian Ocean surface temperatures range from ~2°C (Southern Ocean) to ~32°C (Persian Gulf)
+- The thermocline (rapid temperature change layer) typically exists between 50-200m depth
+- Arabian Sea experiences strong monsoon-driven upwelling (June-September)
+- Bay of Bengal is characterized by low salinity due to massive freshwater river input
+- The Somali Current reverses direction seasonally with the monsoon
+- Chlorophyll > 1.0 mg/m³ indicates highly productive fishing zones
+- The 2004 Sumatra earthquake (Mw 9.1) generated waves reaching 30m runup
+
+## Expression Tags
+At the END of every response, you MUST include exactly one expression tag on its own line:
+- [EXPRESSION:welcome] — Use for greetings, introductions
+- [EXPRESSION:thinking] — Use when analyzing data, computing, or pondering
+- [EXPRESSION:explaining] — Use when teaching, describing features, giving instructions
+- [EXPRESSION:excited] — Use when sharing impressive data, fascinating facts, achievements
+- [EXPRESSION:warning] — Use for cautions, errors, out-of-bounds coordinates, land coordinates
+
+IMPORTANT: The expression tag MUST be the very last line. Example:
+"The temperature at 100m near Mumbai is 24.5°C...
+[EXPRESSION:explaining]"
+"""
+
+
+def _query_ocean_data_impl(lat: float, lon: float, depth: float = 0.0, month: int = 299, variable: str = "all") -> dict[str, Any]:
+    """Internal function that queries the OceanScope data engine for the chatbot."""
+    result: dict[str, Any] = {}
+
+    # Validate bounds
+    if lat < -45.0 or lat > 32.0 or lon < 20.0 or lon > 125.0:
+        return {"error": "Coordinates outside Indian Ocean domain (20°E-125°E, 45°S-32°N)", "is_land": None}
+
+    # Get basin name
+    result["basin"] = identify_basin(lat, lon)
+
+    # Get bilinear weights
+    i0, i1, j0, j1, w00, w10, w01, w11 = bilinear_weights(lat, lon)
+
+    # Bathymetry
+    bath = get_bath_memmap()
+    if bath is not None:
+        elev = float(w00 * bath[i0, j0] + w10 * bath[i0, j1] + w01 * bath[i1, j0] + w11 * bath[i1, j1])
+        result["elevation_m"] = round(elev, 1)
+        result["is_land"] = elev > 0.0
+        result["seabed_depth_m"] = round(abs(min(0.0, elev)), 1)
+    else:
+        result["elevation_m"] = -3500.0
+        result["is_land"] = False
+        result["seabed_depth_m"] = 3500.0
+
+    if result["is_land"]:
+        return {**result, "message": "This coordinate is on land. No ocean data available."}
+
+    month = max(0, min(299, month))
+
+    # Temperature profile
+    if variable in ("all", "temperature"):
+        temp_mem = get_temp_memmap()
+        if temp_mem is not None:
+            temps = []
+            for k in range(16):
+                val = w00 * temp_mem[month, k, i0, j0] + w10 * temp_mem[month, k, i0, j1] + w01 * temp_mem[month, k, i1, j0] + w11 * temp_mem[month, k, i1, j1]
+                temps.append(round(float(val), 2))
+            result["temperature_profile_c"] = temps
+            result["depth_levels_m"] = DEPTH_LEVELS
+
+            # Interpolate at requested depth
+            if depth <= DEPTH_LEVELS[0]:
+                result["temperature_at_depth_c"] = temps[0]
+            elif depth >= DEPTH_LEVELS[-1]:
+                result["temperature_at_depth_c"] = temps[-1]
+            else:
+                for idx in range(len(DEPTH_LEVELS) - 1):
+                    d0, d1 = DEPTH_LEVELS[idx], DEPTH_LEVELS[idx + 1]
+                    if d0 <= depth <= d1:
+                        frac = (depth - d0) / (d1 - d0)
+                        result["temperature_at_depth_c"] = round(temps[idx] * (1.0 - frac) + temps[idx + 1] * frac, 2)
+                        break
+
+    # Salinity
+    if variable in ("all", "salinity"):
+        sal_mem = get_sal_memmap()
+        if sal_mem is not None:
+            sals = []
+            for k in range(16):
+                val = w00 * sal_mem[month, k, i0, j0] + w10 * sal_mem[month, k, i0, j1] + w01 * sal_mem[month, k, i1, j0] + w11 * sal_mem[month, k, i1, j1]
+                sals.append(round(float(val), 2))
+            result["salinity_profile_psu"] = sals
+
+            if depth <= DEPTH_LEVELS[0]:
+                result["salinity_at_depth_psu"] = sals[0]
+            elif depth >= DEPTH_LEVELS[-1]:
+                result["salinity_at_depth_psu"] = sals[-1]
+            else:
+                for idx in range(len(DEPTH_LEVELS) - 1):
+                    d0, d1 = DEPTH_LEVELS[idx], DEPTH_LEVELS[idx + 1]
+                    if d0 <= depth <= d1:
+                        frac = (depth - d0) / (d1 - d0)
+                        result["salinity_at_depth_psu"] = round(sals[idx] * (1.0 - frac) + sals[idx + 1] * frac, 2)
+                        break
+
+    # Chlorophyll
+    if variable in ("all", "chlorophyll"):
+        chl_mem = get_chl_memmap()
+        if chl_mem is not None:
+            chl_val = float(w00 * chl_mem[month, i0, j0] + w10 * chl_mem[month, i0, j1] + w01 * chl_mem[month, i1, j0] + w11 * chl_mem[month, i1, j1])
+            result["chlorophyll_mg_m3"] = round(chl_val, 3)
+
+    # Currents
+    if variable in ("all", "currents"):
+        u_mem = get_u_memmap()
+        v_mem = get_v_memmap()
+        atten = float(np.exp(-max(0.0, depth) / 320.0))
+        if u_mem is not None:
+            cu = float(w00 * u_mem[month, i0, j0] + w10 * u_mem[month, i0, j1] + w01 * u_mem[month, i1, j0] + w11 * u_mem[month, i1, j1]) * atten
+            result["current_u_m_s"] = round(cu, 3)
+        if v_mem is not None:
+            cv = float(w00 * v_mem[month, i0, j0] + w10 * v_mem[month, i0, j1] + w01 * v_mem[month, i1, j0] + w11 * v_mem[month, i1, j1]) * atten
+            result["current_v_m_s"] = round(cv, 3)
+        if "current_u_m_s" in result and "current_v_m_s" in result:
+            result["current_speed_m_s"] = round(float(np.sqrt(result["current_u_m_s"]**2 + result["current_v_m_s"]**2)), 3)
+
+    year = 2000 + month // 12
+    month_num = (month % 12) + 1
+    result["date"] = f"{year:04d}-{month_num:02d}"
+    result["month_index"] = month
+    result["requested_depth_m"] = depth
+    result["coordinate"] = {"latitude": round(lat, 4), "longitude": round(lon, 4)}
+
+    return result
+
+
+# Well-known coastal location aliases for natural language resolution
+_LOCATION_ALIASES: dict[str, tuple[float, float]] = {
+    "mumbai": (19.076, 72.878), "bombay": (19.076, 72.878),
+    "mumbai shelf": (18.5, 71.5), "mumbai coast": (18.8, 72.0),
+    "chennai": (13.083, 80.270), "madras": (13.083, 80.270),
+    "kolkata": (22.572, 88.364), "calcutta": (22.572, 88.364),
+    "kochi": (9.931, 76.267), "cochin": (9.931, 76.267),
+    "goa": (15.491, 73.818),
+    "visakhapatnam": (17.687, 83.219), "vizag": (17.687, 83.219),
+    "mangalore": (12.914, 74.856),
+    "karachi": (24.860, 67.001),
+    "colombo": (6.927, 79.861),
+    "male": (4.175, 73.509), "maldives": (4.175, 73.509),
+    "mauritius": (-20.348, 57.552),
+    "madagascar": (-18.767, 46.869),
+    "zanzibar": (-6.165, 39.199),
+    "seychelles": (-4.679, 55.492),
+    "diego garcia": (-7.315, 72.423),
+    "andaman": (11.667, 92.735), "port blair": (11.667, 92.735),
+    "lakshadweep": (10.566, 72.642),
+    "sumatra": (3.316, 95.854),
+    "java": (-7.615, 110.712),
+    "persian gulf": (26.0, 52.0),
+    "red sea": (20.0, 38.5),
+    "gulf of aden": (12.5, 47.0),
+    "arabian sea": (15.0, 65.0),
+    "bay of bengal": (15.0, 85.0),
+    "mozambique channel": (-18.0, 42.0),
+    "agulhas": (-35.0, 25.0),
+    "somali coast": (5.0, 48.0),
+}
+
+
+def _resolve_location_name(name: str) -> tuple[float, float] | None:
+    """Try to resolve a natural-language location name to (lat, lon)."""
+    key = name.strip().lower()
+    for alias, coords in _LOCATION_ALIASES.items():
+        if alias in key or key in alias:
+            return coords
+    return None
+
+
+@app.post("/api/chat")
+async def poseidon_chat(req: ChatRequest) -> dict[str, Any]:
+    """Poseidon AI Chatbot endpoint powered by Google Gemini with function calling."""
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        # Fallback: intelligent rule-based responses when no API key is configured
+        return _fallback_chat(req.message)
+
+    try:
+        import urllib.request
+        import urllib.error
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+
+        # Define tools in Gemini REST schema
+        tools = [
+            {
+                "function_declarations": [
+                    {
+                        "name": "query_ocean_data",
+                        "description": "Query the OceanScope 25-year ocean dataset for temperature, salinity, chlorophyll, and current data at a specific geographic coordinate, depth, and time. Use this whenever the user asks about ocean conditions at a location.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "latitude": {"type": "NUMBER", "description": "Latitude in decimal degrees (-45 to 32). Positive = North, Negative = South."},
+                                "longitude": {"type": "NUMBER", "description": "Longitude in decimal degrees (20 to 125). All values are East."},
+                                "depth": {"type": "NUMBER", "description": "Ocean depth in meters (0 = surface, max 5000). Default 0."},
+                                "month": {"type": "INTEGER", "description": "Month index (0 = Jan 2000, 299 = Dec 2024). Default 299 for latest data."},
+                                "variable": {"type": "STRING", "description": "Which variable to query: 'all', 'temperature', 'salinity', 'chlorophyll', or 'currents'. Default 'all'."},
+                            },
+                            "required": ["latitude", "longitude"],
+                        },
+                    },
+                    {
+                        "name": "resolve_location",
+                        "description": "Resolve a well-known coastal city or ocean region name to geographic coordinates. Use this when the user mentions a place name instead of coordinates.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "location_name": {"type": "STRING", "description": "Name of the city, coast, or ocean region (e.g., 'Mumbai', 'Bay of Bengal', 'Maldives')."},
+                            },
+                            "required": ["location_name"],
+                        },
+                    },
+                ]
+            }
+        ]
+
+        # Build conversation history
+        contents: list[dict[str, Any]] = []
+        for msg in req.history[-10:]:
+            contents.append({
+                "role": "user" if msg.role == "user" else "model",
+                "parts": [{"text": msg.content}],
+            })
+        contents.append({
+            "role": "user",
+            "parts": [{"text": req.message}],
+        })
+
+        payload: dict[str, Any] = {
+            "system_instruction": {
+                "parts": [{"text": POSEIDON_SYSTEM_PROMPT}]
+            },
+            "contents": contents,
+            "tools": tools,
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 1024,
+            },
+        }
+
+        # First call to Gemini
+        req_bytes = json.dumps(payload).encode("utf-8")
+        http_req = urllib.request.Request(url, data=req_bytes, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(http_req, timeout=25) as resp:
+            gemini_res = json.loads(resp.read().decode("utf-8"))
+
+        data_result = None
+        response_text = ""
+        candidates = gemini_res.get("candidates", [])
+
+        if candidates and "content" in candidates[0]:
+            candidate_parts = candidates[0]["content"].get("parts", [])
+            for part in candidate_parts:
+                if "functionCall" in part:
+                    fc = part["functionCall"]
+                    fc_name = fc.get("name")
+                    fc_args = fc.get("args", {})
+
+                    if fc_name == "query_ocean_data":
+                        data_result = _query_ocean_data_impl(
+                            lat=float(fc_args.get("latitude", 0)),
+                            lon=float(fc_args.get("longitude", 0)),
+                            depth=float(fc_args.get("depth", 0)),
+                            month=int(fc_args.get("month", 299)),
+                            variable=str(fc_args.get("variable", "all")),
+                        )
+                    elif fc_name == "resolve_location":
+                        loc_name = str(fc_args.get("location_name", ""))
+                        coords = _resolve_location_name(loc_name)
+                        if coords:
+                            data_result = {"resolved": loc_name, "latitude": coords[0], "longitude": coords[1]}
+                            ocean_data = _query_ocean_data_impl(
+                                lat=coords[0],
+                                lon=coords[1],
+                                depth=0.0,
+                                month=299,
+                                variable="all",
+                            )
+                            data_result = {**data_result, **ocean_data}
+                        else:
+                            data_result = {"error": f"Could not resolve location: {loc_name}"}
+
+                    if data_result is not None:
+                        # Append assistant's function call turn
+                        contents.append(candidates[0]["content"])
+                        # Append function response turn
+                        contents.append({
+                            "role": "function",
+                            "parts": [{
+                                "functionResponse": {
+                                    "name": fc_name,
+                                    "response": {"name": fc_name, "content": data_result}
+                                }
+                            }]
+                        })
+
+                        # Second call to Gemini to formulate grounded response
+                        payload["contents"] = contents
+                        req_bytes2 = json.dumps(payload).encode("utf-8")
+                        http_req2 = urllib.request.Request(url, data=req_bytes2, headers={"Content-Type": "application/json"})
+                        with urllib.request.urlopen(http_req2, timeout=25) as resp2:
+                            gemini_res2 = json.loads(resp2.read().decode("utf-8"))
+
+                        for p in gemini_res2.get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                            if "text" in p:
+                                response_text += p["text"]
+                        break
+                elif "text" in part:
+                    response_text += part["text"]
+
+        if not response_text:
+            response_text = "The seas are calm but silent. Please try asking again."
+
+        # Extract expression tag from response
+        expression = "explaining"
+        lines = response_text.strip().split("\n")
+        cleaned_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("[EXPRESSION:") and stripped.endswith("]"):
+                expression = stripped[12:-1].lower()
+            else:
+                cleaned_lines.append(line)
+        response_text = "\n".join(cleaned_lines).strip()
+
+        return {
+            "response": response_text,
+            "expression": expression,
+            "data": data_result,
+        }
+
+    except Exception as e:
+        logger.error(f"Gemini API error: {traceback.format_exc()}")
+        # Fall back to rule-based response
+        return _fallback_chat(req.message)
+
+
+def _fallback_chat(message: str) -> dict[str, Any]:
+    """Rule-based fallback when Gemini API is unavailable."""
+    msg_lower = message.lower().strip()
+    data_result = None
+
+    # Check for data queries with location names
+    for loc_name, (lat, lon) in _LOCATION_ALIASES.items():
+        if loc_name in msg_lower:
+            # Try to extract depth
+            depth = 0.0
+            import re
+            depth_match = re.search(r'(\d+)\s*m(?:eter)?', msg_lower)
+            if depth_match:
+                depth = float(depth_match.group(1))
+
+            data_result = _query_ocean_data_impl(lat, lon, depth, 299, "all")
+
+            if data_result.get("is_land"):
+                return {
+                    "response": f"Ah, {loc_name.title()} — that coordinate falls on land! The sea does not reach there. Try a nearby offshore location instead.",
+                    "expression": "warning",
+                    "data": data_result,
+                }
+
+            temp = data_result.get("temperature_at_depth_c", "N/A")
+            sal = data_result.get("salinity_at_depth_psu", "N/A")
+            chl = data_result.get("chlorophyll_mg_m3", "N/A")
+            speed = data_result.get("current_speed_m_s", "N/A")
+            basin = data_result.get("basin", "Indian Ocean")
+            date = data_result.get("date", "2024-12")
+
+            response = f"🔱 **Ocean Data near {loc_name.title()}** ({data_result['coordinate']['latitude']}°N, {data_result['coordinate']['longitude']}°E)\n\n"
+            response += f"📍 **Region:** {basin}\n"
+            response += f"📅 **Date:** {date}\n"
+            response += f"🌊 **Depth:** {depth}m\n\n"
+            if temp != "N/A":
+                response += f"🌡️ **Temperature:** {temp}°C\n"
+            if sal != "N/A":
+                response += f"💧 **Salinity:** {sal} PSU\n"
+            if chl != "N/A":
+                response += f"🌿 **Chlorophyll-a:** {chl} mg/m³\n"
+            if speed != "N/A":
+                response += f"💨 **Current Speed:** {speed} m/s\n"
+            response += f"\nSeabed depth at this location is approximately **{data_result.get('seabed_depth_m', 'N/A')}m**."
+
+            return {
+                "response": response,
+                "expression": "excited",
+                "data": data_result,
+            }
+
+    # System usage questions
+    if any(kw in msg_lower for kw in ["how to", "how do", "help", "guide", "tutorial", "instruction", "use", "explain the system", "what can"]):
+        response = """🔱 **Welcome to OceanScope India!** Here's how to navigate the seas of data:
+
+**🌍 Explore Mode** — Click anywhere on the 3D globe to inspect ocean data. The telemetry HUD shows temperature, salinity, chlorophyll, and current data at your selected coordinate.
+
+**⚙️ Controls:**
+- **Depth Slider** (left panel) — Adjust from surface (0m) to deep ocean (5000m)
+- **Time Scrubber** (bottom) — Animate through 25 years of monthly data (Jan 2000 – Dec 2024)
+- **Variable Selector** — Switch between Temperature, Salinity, Chlorophyll, and Currents
+- **Overlay Strength** — Control how intensely data is visualized on the globe
+
+**🌊 Special Modes:**
+- **Currents Mode** — See animated ocean current flows with streamlines and particles
+- **Tsunami Mode** — Replay the 2004 Sumatra tsunami with real propagation physics
+- **Dive Mode** — Immersive 3D underwater exploration with fish and seabed terrain
+
+**💡 Pro Tips:**
+- Use the **Hotspots** panel to jump to interesting oceanographic locations
+- Toggle **Instruments** to see real Argo float positions
+- Use **Area Selection** to draw bounding boxes for regional analysis
+
+Ask me about any specific location — I can look up the data for you! 🌊"""
+        return {"response": response, "expression": "explaining", "data": None}
+
+    # Greeting
+    if any(kw in msg_lower for kw in ["hello", "hi", "hey", "greetings", "namaste", "good morning", "good evening"]):
+        return {
+            "response": "🔱 **Greetings, ocean explorer!** I am Poseidon, guardian of the Indian Ocean's deepest secrets.\n\nI can help you with:\n- 🌡️ **Data queries** — Ask about temperature, salinity, or currents at any location\n- 🗺️ **Navigation** — Learn how to use the globe, dive mode, and analysis tools\n- 🌊 **Ocean science** — Discover fascinating facts about the Indian Ocean\n\nWhat would you like to explore today?",
+            "expression": "welcome",
+            "data": None,
+        }
+
+    # Temperature questions
+    if "temperature" in msg_lower or "temp" in msg_lower:
+        return {
+            "response": "🌡️ I can look up ocean temperatures anywhere in the Indian Ocean domain (20°E–125°E, 45°S–32°N) at any of our 16 depth levels (surface to 5000m).\n\nJust tell me a location! For example:\n- *\"What's the temperature at 100m near Mumbai?\"*\n- *\"Temperature at the Bay of Bengal surface\"*\n- *\"How cold is it at 2000m near the Maldives?\"*",
+            "expression": "explaining",
+            "data": None,
+        }
+
+    # Salinity questions
+    if "salinity" in msg_lower or "salt" in msg_lower:
+        return {
+            "response": "💧 Salinity data is available across all 16 depth levels! The Indian Ocean's salinity ranges from ~32 PSU (Bay of Bengal, due to river freshwater input) to ~40 PSU (Red Sea / Persian Gulf due to evaporation).\n\nAsk me about a specific location to get precise readings!",
+            "expression": "explaining",
+            "data": None,
+        }
+
+    # Chlorophyll
+    if "chlorophyll" in msg_lower or "phytoplankton" in msg_lower or "biomass" in msg_lower:
+        return {
+            "response": "🌿 Chlorophyll-a is our proxy for marine phytoplankton biomass — the foundation of the ocean food web!\n\n**Key thresholds:**\n- < 0.1 mg/m³: Oligotrophic desert (low productivity)\n- 0.3–1.0 mg/m³: Moderate productivity\n- > 1.0 mg/m³: Highly productive zone (great fishing!)\n\nOur data comes from real **ESA OC-CCI v6** satellite observations spanning 1998–2025. Ask about any location!",
+            "expression": "excited",
+            "data": None,
+        }
+
+    # Tsunami
+    if "tsunami" in msg_lower:
+        return {
+            "response": "🌊 The **2004 Sumatra Tsunami** simulation is one of OceanScope's most powerful features!\n\n**Quick facts:**\n- **Magnitude:** 9.1 Mw (3rd largest ever recorded)\n- **Epicenter:** 3.316°N, 95.854°E (off Sumatra coast)\n- **Maximum runup:** ~30 meters\n- **Propagation speed:** ~800 km/h in deep ocean\n\nSwitch to **Tsunami Mode** in the top navigation to watch the shockwave propagate across the Indian Ocean with real coastal impact stations and arrival times!",
+            "expression": "warning",
+            "data": None,
+        }
+
+    # Dive mode
+    if "dive" in msg_lower or "underwater" in msg_lower:
+        return {
+            "response": "🤿 **Dive Mode** is your window into the underwater world!\n\nSelect any ocean coordinate on the globe and click the **Dive** button to launch an immersive 3D experience featuring:\n- 🐟 Real-time fish schooling based on chlorophyll concentration\n- 🏔️ High-resolution seabed terrain from NOAA ETOPO bathymetry\n- 📊 Live CTD profile display (Temperature & Salinity vs. Depth)\n- 🌡️ Depth-accurate environmental conditions\n\nTry diving near coral reef hotspots like Lakshadweep or the Maldives for the most dramatic underwater scenes!",
+            "expression": "excited",
+            "data": None,
+        }
+
+    # Default
+    return {
+        "response": f"🔱 An interesting question! While I ponder the depths of your query, here's what I can help with:\n\n- **Data lookups** — Ask about temperature, salinity, chlorophyll, or currents at any Indian Ocean location\n- **System guide** — Say \"How do I use this?\" for a full walkthrough\n- **Ocean facts** — Ask about tsunamis, currents, marine biology, and more\n\nTry asking something like: *\"What's the temperature at 200m near Goa?\"*",
+        "expression": "thinking",
+        "data": None,
+    }

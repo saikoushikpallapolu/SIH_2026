@@ -3136,3 +3136,542 @@ button {
   color: #e0f7fa;
   letter-spacing: 0.2px;
 }
+
+/* ==========================================================================
+   Poseidon 4D Ocean Chatbot Styles
+   ========================================================================== */
+
+/* Floating Action Button (FAB) */
+.poseidon-fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #004d40 0%, #00242c 50%, #001219 100%);
+  border: 2px solid rgba(0, 242, 254, 0.6);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 20px rgba(0, 242, 254, 0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+  padding: 0;
+}
+
+.poseidon-fab:hover {
+  transform: scale(1.1) translateY(-2px);
+  border-color: #00f2fe;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7), 0 0 30px rgba(0, 242, 254, 0.6);
+}
+
+.poseidon-fab:active {
+  transform: scale(0.96);
+}
+
+.poseidon-fab-hidden {
+  opacity: 0;
+  transform: scale(0.5);
+  pointer-events: none;
+}
+
+.fab-poseidon-img {
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 6px rgba(0, 242, 254, 0.5));
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+
+.poseidon-fab:hover .fab-poseidon-img {
+  transform: scale(1.15) translateY(-2px);
+  filter: drop-shadow(0 4px 14px rgba(0, 242, 254, 0.9));
+}
+
+/* Ripple effect */
+.fab-ripple {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 242, 254, 0.5);
+  animation: fabPulse 2.5s infinite cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: none;
+}
+
+.fab-ripple-2 {
+  animation-delay: 1.25s;
+}
+
+@keyframes fabPulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+/* Chat Panel */
+.poseidon-panel {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  height: 620px;
+  max-height: calc(100vh - 48px);
+  border-radius: 20px;
+  background: rgba(4, 18, 32, 0.92);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid rgba(0, 242, 254, 0.3);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8), 0 0 40px rgba(0, 242, 254, 0.15);
+  display: flex;
+  flex-direction: column;
+  z-index: 1001;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: scale(0.9) translateY(20px);
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.poseidon-panel.poseidon-panel-open {
+  transform: scale(1) translateY(0);
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* Header */
+.poseidon-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(0, 40, 60, 0.8) 0%, rgba(4, 18, 32, 0.9) 100%);
+  border-bottom: 1px solid rgba(0, 242, 254, 0.15);
+}
+
+.poseidon-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.poseidon-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.poseidon-name {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  color: #ffd700;
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 8px rgba(255, 215, 0, 0.3);
+}
+
+.poseidon-status {
+  font-size: 10.5px;
+  color: #70e2ff;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'DM Mono', monospace;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #00e5ff;
+  box-shadow: 0 0 8px #00e5ff;
+  animation: dotPulse 2s infinite ease-in-out;
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+.poseidon-close {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a0c4d8;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.poseidon-close:hover {
+  background: rgba(255, 82, 82, 0.2);
+  border-color: rgba(255, 82, 82, 0.5);
+  color: #ff5252;
+  transform: rotate(90deg);
+}
+
+.poseidon-avatar-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0 8px;
+  background: radial-gradient(ellipse at center, rgba(0, 229, 255, 0.12) 0%, rgba(2, 12, 24, 0.4) 70%);
+  border-bottom: 1px solid rgba(0, 242, 254, 0.15);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Character Card Container */
+.poseidon-character-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.poseidon-aura-glow {
+  position: absolute;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 242, 254, 0.35) 0%, rgba(0, 150, 200, 0.12) 50%, transparent 75%);
+  filter: blur(14px);
+  pointer-events: none;
+  z-index: 0;
+  animation: auraPulse 3s ease-in-out infinite alternate;
+}
+
+@keyframes auraPulse {
+  0% { transform: scale(0.95); opacity: 0.6; }
+  100% { transform: scale(1.15); opacity: 1; }
+}
+
+.poseidon-character-img {
+  position: relative;
+  z-index: 1;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.65)) drop-shadow(0 0 16px rgba(0, 242, 254, 0.4));
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+
+/* Header Mini Badge */
+.poseidon-mini-badge {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 242, 254, 0.25) 0%, rgba(3, 20, 36, 0.95) 100%);
+  border: 1.5px solid rgba(0, 242, 254, 0.6);
+  box-shadow: 0 0 12px rgba(0, 242, 254, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.poseidon-mini-img {
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  transform: translateY(1px);
+}
+
+/* Assistant Message Mini Avatar */
+.msg-poseidon-mini {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.5));
+}
+
+/* Expression Specific Character Animations & Aura Shaders */
+.poseidon-expr-welcome .poseidon-character-img {
+  animation: poseidonFloatWelcome 3.5s ease-in-out infinite;
+}
+
+.poseidon-expr-thinking .poseidon-character-img {
+  animation: poseidonFloatThinking 3s ease-in-out infinite;
+  filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 20px rgba(79, 140, 255, 0.65));
+}
+
+.poseidon-expr-thinking .poseidon-aura-glow {
+  background: radial-gradient(circle, rgba(79, 140, 255, 0.4) 0%, rgba(20, 50, 150, 0.15) 50%, transparent 75%);
+}
+
+.poseidon-expr-explaining .poseidon-character-img {
+  animation: poseidonFloatExplaining 2.5s ease-in-out infinite;
+  filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 22px rgba(0, 242, 254, 0.7));
+}
+
+.poseidon-expr-excited .poseidon-character-img {
+  animation: poseidonFloatExcited 1.4s ease-in-out infinite;
+  filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 28px rgba(0, 255, 180, 0.85));
+}
+
+.poseidon-expr-excited .poseidon-aura-glow {
+  background: radial-gradient(circle, rgba(0, 255, 180, 0.45) 0%, rgba(0, 200, 160, 0.2) 50%, transparent 75%);
+}
+
+.poseidon-expr-warning .poseidon-character-img {
+  animation: poseidonFloatWarning 1.2s ease-in-out infinite;
+  filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 24px rgba(255, 100, 50, 0.75));
+}
+
+.poseidon-expr-warning .poseidon-aura-glow {
+  background: radial-gradient(circle, rgba(255, 100, 50, 0.45) 0%, rgba(200, 50, 20, 0.15) 50%, transparent 75%);
+}
+
+@keyframes poseidonFloatWelcome {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-5px) rotate(1deg); }
+}
+
+@keyframes poseidonFloatThinking {
+  0%, 100% { transform: translateY(0) rotate(-1.5deg) scale(0.98); }
+  50% { transform: translateY(-3px) rotate(0.5deg) scale(1); }
+}
+
+@keyframes poseidonFloatExplaining {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-4px) scale(1.03); }
+}
+
+@keyframes poseidonFloatExcited {
+  0%, 100% { transform: translateY(0) scale(1); }
+  30% { transform: translateY(-9px) scale(1.06) rotate(1deg); }
+  60% { transform: translateY(-3px) scale(1.02) rotate(-1deg); }
+}
+
+@keyframes poseidonFloatWarning {
+  0%, 100% { transform: translateX(0) scale(1); }
+  25% { transform: translateX(-3px) scale(1.01); }
+  75% { transform: translateX(3px) scale(1.01); }
+}
+
+.avatar-expression-label {
+  font-size: 9.5px;
+  font-family: 'DM Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: #00e5ff;
+  background: rgba(0, 229, 255, 0.12);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  padding: 2px 10px;
+  border-radius: 12px;
+  margin-top: 6px;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.2);
+}
+
+/* Messages Container */
+.poseidon-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scroll-behavior: smooth;
+}
+
+.poseidon-messages::-webkit-scrollbar {
+  width: 5px;
+}
+
+.poseidon-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.poseidon-messages::-webkit-scrollbar-thumb {
+  background: rgba(0, 242, 254, 0.2);
+  border-radius: 4px;
+}
+
+.poseidon-messages::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 242, 254, 0.4);
+}
+
+/* Individual Message */
+.poseidon-msg {
+  display: flex;
+  gap: 8px;
+  max-width: 90%;
+  animation: msgFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes msgFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.poseidon-msg-user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.poseidon-msg-assistant {
+  align-self: flex-start;
+}
+
+.msg-avatar-mini {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.msg-bubble {
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.poseidon-msg-user .msg-bubble {
+  background: linear-gradient(135deg, #0077b6 0%, #0096c7 100%);
+  color: #ffffff;
+  border-bottom-right-radius: 3px;
+  box-shadow: 0 4px 12px rgba(0, 119, 182, 0.3);
+}
+
+.poseidon-msg-assistant .msg-bubble {
+  background: rgba(8, 28, 48, 0.85);
+  border: 1px solid rgba(0, 242, 254, 0.18);
+  color: #d6ecf7;
+  border-bottom-left-radius: 3px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.msg-bubble strong {
+  color: #70e2ff;
+  font-weight: 600;
+}
+
+.msg-bubble em {
+  color: #ffd700;
+  font-style: italic;
+}
+
+.msg-bubble ul {
+  margin: 6px 0 6px 16px;
+  padding: 0;
+}
+
+.msg-bubble li {
+  margin-bottom: 3px;
+}
+
+/* Typing Indicator */
+.poseidon-typing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.typing-bubble {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #00e5ff;
+  box-shadow: 0 0 6px rgba(0, 229, 255, 0.6);
+  animation: typingBounce 1.2s infinite ease-in-out;
+}
+
+@keyframes typingBounce {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+
+/* Input Bar */
+.poseidon-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid rgba(0, 242, 254, 0.15);
+  background: rgba(2, 10, 20, 0.95);
+}
+
+.poseidon-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(0, 242, 254, 0.2);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  color: #ffffff;
+  outline: none;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.poseidon-input::placeholder {
+  color: rgba(160, 196, 216, 0.5);
+}
+
+.poseidon-input:focus {
+  border-color: #00f2fe;
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 0 12px rgba(0, 242, 254, 0.25);
+}
+
+.poseidon-input:disabled {
+  opacity: 0.5;
+}
+
+.poseidon-send {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #00b4d8 0%, #0077b6 100%);
+  border: 1px solid rgba(0, 242, 254, 0.4);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.poseidon-send:hover:not(:disabled) {
+  transform: scale(1.06);
+  background: linear-gradient(135deg, #00e5ff 0%, #0096c7 100%);
+  box-shadow: 0 0 14px rgba(0, 229, 255, 0.5);
+}
+
+.poseidon-send:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.poseidon-send:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+
