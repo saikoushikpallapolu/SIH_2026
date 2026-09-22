@@ -394,6 +394,7 @@ function OceanShader({
   tsunamiActive = false,
   tsunamiScenario = TSUNAMI_HISTORIC_DATA,
   tsunamiHour = 2.0,
+  showGraticule = true,
 }: {
   variable: OceanVariable
   depth: number
@@ -403,8 +404,17 @@ function OceanShader({
   tsunamiActive?: boolean
   tsunamiScenario?: TsunamiScenario
   tsunamiHour?: number
+  showGraticule?: boolean
 }) {
-  const [earthMap, waterMask, texSumatra, texMakran, texWharton, texBathymetry] = useLoader(
+  const [
+    earthMap,
+    waterMask,
+    texSumatra,
+    texMakran,
+    texWharton,
+    texBathymetry,
+    texBathymetryRelief,
+  ] = useLoader(
     THREE.TextureLoader,
     [
       EARTH_DAY_MAP,
@@ -413,6 +423,7 @@ function OceanShader({
       '/data/tsunami_travel_time_1945_makran.png',
       '/data/tsunami_travel_time_2012_wharton.png',
       '/data/indian_ocean_bathymetry.png',
+      '/data/bathymetry_relief.png',
     ]
   )
   // High-Resolution Anisotropic Texture Filtering for crisp zoom
@@ -436,7 +447,14 @@ function OceanShader({
     texBathymetry.minFilter = THREE.LinearMipmapLinearFilter
     texBathymetry.magFilter = THREE.LinearFilter
     texBathymetry.needsUpdate = true
-  }, [earthMap, waterMask, texBathymetry])
+
+    texBathymetryRelief.generateMipmaps = true
+    texBathymetryRelief.minFilter = THREE.LinearMipmapLinearFilter
+    texBathymetryRelief.magFilter = THREE.LinearFilter
+    texBathymetryRelief.wrapS = THREE.ClampToEdgeWrapping
+    texBathymetryRelief.wrapT = THREE.ClampToEdgeWrapping
+    texBathymetryRelief.needsUpdate = true
+  }, [earthMap, waterMask, texBathymetry, texBathymetryRelief])
 
   const material = useMemo(
     () =>
@@ -447,12 +465,13 @@ function OceanShader({
           uMonthPhase: { value: (timeIndex / 12) * Math.PI * 2 },
           uDepth: { value: depth },
           uVariable: {
-            value: ['temperature', 'salinity', 'chlorophyll', 'currents'].indexOf(variable),
+            value: ['temperature', 'salinity', 'chlorophyll', 'currents', 'bathymetry'].indexOf(variable),
           },
           uOverlayStrength: { value: overlayStrength },
           uEarthMap: { value: earthMap },
           uWaterMask: { value: waterMask },
           uBathymetryMap: { value: texBathymetry },
+          uBathymetryRelief: { value: texBathymetryRelief },
           uTsunamiActive: { value: tsunamiActive ? 1.0 : 0.0 },
           uTsunamiHour: { value: tsunamiHour },
           uTsunamiPropMap: { value: texSumatra },
@@ -481,6 +500,7 @@ function OceanShader({
            * When 0.0 the shader uses the synthetic Gaussian chlorophyll baseline.
            */
           uChlIsReal: { value: 0.0 },
+          uShowGraticule: { value: showGraticule ? 1.0 : 0.0 },
         },
         vertexShader: `
           varying vec2 vUv;
@@ -499,9 +519,11 @@ function OceanShader({
           uniform float uDepth;
           uniform float uVariable;
           uniform float uOverlayStrength;
+          uniform float uShowGraticule;
           uniform sampler2D uEarthMap;
           uniform sampler2D uWaterMask;
           uniform sampler2D uBathymetryMap;
+          uniform sampler2D uBathymetryRelief;
           uniform float uTsunamiActive;
           uniform float uTsunamiHour;
           uniform sampler2D uTsunamiPropMap;
@@ -699,6 +721,32 @@ function OceanShader({
               }
 
               gl_FragColor = vec4(mix(litLand, litOcean, water), 1.0);
+
+              // Precision Coordinate & Domain Grid Lines
+              if (uShowGraticule > 0.5) {
+                float latDist10 = abs(fract(latDeg / 10.0 + 0.5) - 0.5) * 10.0;
+                float lonDist10 = abs(fract(lonDeg / 10.0 + 0.5) - 0.5) * 10.0;
+                float grid10Alpha = 1.0 - smoothstep(0.06, 0.28, min(latDist10, lonDist10));
+                float majorDist = min(abs(latDeg), abs(lonDeg));
+                float majorAlpha = 1.0 - smoothstep(0.08, 0.36, majorDist);
+                float tropicDist = min(abs(latDeg - 23.436), abs(latDeg - (-23.436)));
+                float tropicAlpha = 1.0 - smoothstep(0.06, 0.26, tropicDist);
+                bool inLonSpan = (lonDeg >= 19.8 && lonDeg <= 125.2);
+                bool inLatSpan = (latDeg >= -45.2 && latDeg <= 32.2);
+                float distLatBound = min(abs(latDeg - 32.0), abs(latDeg - (-45.0)));
+                float distLonBound = min(abs(lonDeg - 20.0), abs(lonDeg - 125.0));
+                float domainLatLine = inLonSpan ? (1.0 - smoothstep(0.06, 0.32, distLatBound)) : 0.0;
+                float domainLonLine = inLatSpan ? (1.0 - smoothstep(0.06, 0.32, distLonBound)) : 0.0;
+                float domainBoxAlpha = max(domainLatLine, domainLonLine);
+                vec3 cGridStandard = vec3(0.0, 0.72, 0.98);
+                vec3 cGridMajor = vec3(0.0, 0.95, 1.0);
+                vec3 cDomainBox = vec3(0.22, 0.88, 1.0);
+                vec3 compositeGridColor = mix(cGridStandard, cGridMajor, majorAlpha);
+                compositeGridColor = mix(compositeGridColor, cDomainBox, domainBoxAlpha);
+                float totalGridAlpha = max(grid10Alpha * 0.55, max(majorAlpha * 0.90, max(tropicAlpha * 0.65, domainBoxAlpha * 0.95)));
+                gl_FragColor.rgb = mix(gl_FragColor.rgb, compositeGridColor, totalGridAlpha);
+              }
+
               return;
             }
 
@@ -728,12 +776,16 @@ function OceanShader({
             }
             else if (uVariable < 2.5) {
               float coastProx = 1.0 - smoothstep(0.20, 0.48, texture2D(uWaterMask, vUv).r);
-              float chlVal = clamp(0.18 + coastProx * 0.42 - thermocline * 0.12, 0.0, 1.0);
+              float chlAtten = (uDepth <= 45.0) ? (1.0 + (uDepth / 45.0) * 0.25)
+                             : (uDepth <= 120.0 ? (1.25 * (1.0 - (uDepth - 45.0) / 75.0) * 0.9 + 0.1)
+                             : max(0.005, 0.1 * exp(-(uDepth - 120.0) / 50.0)));
+              float chlVal = clamp((0.18 + coastProx * 0.42) * chlAtten, 0.0, 1.0);
               globalBaseColor = paletteAlga(chlVal);
             }
             else {
+              float currAtten = exp(-max(0.0, uDepth) / 320.0);
               float kineticCore = exp(-pow(latFromEq / 0.28, 2.0)) * 0.32;
-              float flowGlow = clamp(0.08 + kineticCore, 0.0, 1.0);
+              float flowGlow = clamp((0.08 + kineticCore) * currAtten, 0.0, 1.0);
               globalBaseColor = paletteSpeed(flowGlow) * 0.55;
             }
 
@@ -845,13 +897,18 @@ function OceanShader({
                     }
                   }
                   if (chlValid) {
+                    float chlAtten = (uDepth <= 45.0) ? (1.0 + (uDepth / 45.0) * 0.25)
+                                   : (uDepth <= 120.0 ? (1.25 * (1.0 - (uDepth - 45.0) / 75.0) * 0.9 + 0.1)
+                                   : max(0.005, 0.1 * exp(-(uDepth - 120.0) / 50.0)));
+                    chlVal = clamp(chlVal * chlAtten, 0.0, 1.0);
                     sliceColor = paletteAlga(chlVal);
                     isDataValid = true;
                   }
                 } else {
                   // Currents: speed magnitude (m/s) from real GODAS or 25-yr cube
                   if (val >= 0.0) {
-                    float normSpd = clamp(val / 1.2, 0.0, 1.0);
+                    float currAtten = exp(-max(0.0, uDepth) / 320.0);
+                    float normSpd = clamp((val * currAtten) / 1.2, 0.0, 1.0);
                     sliceColor = paletteSpeed(normSpd);
                     isDataValid = true;
                   }
@@ -866,39 +923,156 @@ function OceanShader({
               }
             }
 
-            // Lighting and seamless ocean surface synthesis
+            // ─── DYNAMIC BATHYMETRIC OCEAN BED & VERTICAL DEPTH ENGINE ───
             float light = max(dot(vNormal, normalize(vec3(0.8, 0.9, 1.0))), 0.0);
+
+            // Precise bedrock ocean floor depth from NOAA ETOPO (0 to 7500 meters)
+            float seabedDepth = 4000.0;
+            if (inOisstDomain) {
+              seabedDepth = texture2D(uBathymetryRelief, vec2(su, sv)).r * 7500.0;
+            } else {
+              float coastProx = 1.0 - smoothstep(0.20, 0.48, texture2D(uWaterMask, vUv).r);
+              seabedDepth = mix(4200.0, 150.0, pow(coastProx, 1.6));
+            }
+
+            // Has solid ocean bed / bedrock been reached at the active depth level?
+            bool isBedrock = (uDepth > 0.0) && (seabedDepth <= uDepth) && (seabedDepth > 1.0);
+
+            // Dynamic isobath contour line marking where seabedDepth matches uDepth
+            float depthDiff = abs(seabedDepth - uDepth);
+            float contourWidth = max(22.0, uDepth * 0.035);
+            float isobathLine = (uDepth > 0.0) ? smoothstep(contourWidth, 0.0, depthDiff) : 0.0;
+            vec3 isobathGlowColor = vec3(0.25, 0.88, 1.0); // Radiant cyan isobath contour
+
+            // Authentic shaded seafloor bedrock terrain (continental shelves, slopes & abyssal ridges)
+            vec3 bathyColor = texture2D(uBathymetryMap, vec2(su, sv)).rgb * (0.80 + light * 0.40);
+            vec3 shelfSediment = vec3(0.56, 0.50, 0.40) * (0.85 + light * 0.45);
+            vec3 deepRidgeBed = vec3(0.18, 0.24, 0.32) * (0.85 + light * 0.45);
+            float shelfFrac = clamp(1.0 - (seabedDepth / 450.0), 0.0, 1.0);
+            vec3 geologicalBed = mix(deepRidgeBed, shelfSediment, shelfFrac);
+            vec3 oceanBedColor = mix(geologicalBed, bathyColor * 1.30, 0.55);
+            // Highlight the active depth contact isobath line
+            oceanBedColor = mix(oceanBedColor, isobathGlowColor, isobathLine * 0.85);
+
+            // Natural Earth mode:
+            vec3 naturalEarthLit = earth * (0.50 + light * 0.50);
+            float edgeFadeBathy = 1.0;
+            if (inOisstDomain) {
+              edgeFadeBathy = smoothstep(20.0, 23.5, lon) *
+                              (1.0 - smoothstep(121.5, 125.0, lon)) *
+                              smoothstep(-45.0, -41.5, lat) *
+                              (1.0 - smoothstep(28.5, 32.0, lat));
+            }
+            float waterDepthAtten = clamp(1.0 - (uDepth / 5000.0) * 0.65, 0.35, 1.0);
+            vec3 deepWaterColor = mix(vec3(0.008, 0.045, 0.16), bathyColor * 0.60, 0.35) * waterDepthAtten;
+            vec3 baseNaturalOcean = (uDepth > 0.0 && isBedrock) ? oceanBedColor : deepWaterColor;
+            vec3 naturalOcean = mix(naturalEarthLit, baseNaturalOcean, edgeFadeBathy * 0.94);
+
+            // Lighting and scientific data layer synthesis
             vec3 dataColor;
-            if (uVariable > 1.5 && uVariable < 2.5) {
-              // Chlorophyll NASA Ocean Color: vibrant bio-pigment contrast
+            if (uVariable > 3.5) {
+              // Ocean Bed Layer (NOAA ETOPO Bedrock Relief)
+              dataColor = oceanBedColor;
+            } else if (uVariable > 1.5 && uVariable < 2.5) {
+              // Chlorophyll NASA Ocean Color
               dataColor = globalBaseColor * (0.88 + light * 0.30);
             } else {
               dataColor = globalBaseColor * (0.65 + light * 0.60);
             }
-            // Natural Earth baseline with Google Earth-style bathymetric seafloor relief
-            vec3 naturalOcean = earth * (0.50 + light * 0.50);
-            if (inOisstDomain) {
-              float edgeFadeBathy = smoothstep(20.0, 23.5, lon) *
-                                    (1.0 - smoothstep(121.5, 125.0, lon)) *
-                                    smoothstep(-45.0, -41.5, lat) *
-                                    (1.0 - smoothstep(28.5, 32.0, lat));
-              vec3 bathyColor = texture2D(uBathymetryMap, vec2(su, sv)).rgb * (0.75 + light * 0.35);
-              naturalOcean = mix(naturalOcean, bathyColor, edgeFadeBathy * 0.94);
+
+            // For ALL scientific variables (temperature, salinity, chlorophyll, currents, bathymetry):
+            // Where the solid ocean bed is reached at depth, display the authentic seabed terrain
+            if (isBedrock) {
+              dataColor = oceanBedColor;
             }
 
-            vec3 litOcean = mix(naturalOcean, dataColor, uOverlayStrength);
+            vec3 litOcean;
+            if (isBedrock) {
+              // At solid ocean bed, show the illuminated seabed terrain
+              litOcean = mix(oceanBedColor, dataColor, uOverlayStrength * 0.35);
+            } else {
+              // In active water column, blend natural deep water with scientific data layer
+              litOcean = mix(naturalOcean, dataColor, uOverlayStrength);
+            }
 
             // High-resolution antialiased coastline:
-            // The visual shoreline is strictly governed by the high-resolution sub-pixel
-            // water mask so coastlines are razor-sharp, natural, and never pixelated into 28km blocks.
             float finalWater = water;
 
             // Clean land masking with zero color bleed
-            gl_FragColor = vec4(mix(earth * (0.50 + light * 0.50), litOcean, finalWater), 1.0);
+            gl_FragColor = vec4(mix(naturalEarthLit, litOcean, finalWater), 1.0);
+
+            // Precision Coordinate & Domain Grid Lines
+            if (uShowGraticule > 0.5) {
+              vec3 p = normalize(vPosition);
+              float latDeg = asin(clamp(p.y, -1.0, 1.0)) * 57.29578;
+              float lonDeg = atan(p.z, -p.x) * 57.29578 - 180.0;
+              if (lonDeg < -180.0) lonDeg += 360.0;
+
+              // 1. Global 10° Latitude and Longitude Graticule
+              float latDist10 = abs(fract(latDeg / 10.0 + 0.5) - 0.5) * 10.0;
+              float lonDist10 = abs(fract(lonDeg / 10.0 + 0.5) - 0.5) * 10.0;
+              float lineDist = min(latDist10, lonDist10);
+              float grid10Alpha = 1.0 - smoothstep(0.06, 0.28, lineDist);
+
+              // 2. Major lines (Equator 0° and Prime Meridian 0°)
+              float majorDist = min(abs(latDeg), abs(lonDeg));
+              float majorAlpha = 1.0 - smoothstep(0.08, 0.36, majorDist);
+
+              // 3. Tropics of Cancer (+23.44°) and Capricorn (-23.44°)
+              float tropicDist = min(abs(latDeg - 23.436), abs(latDeg - (-23.436)));
+              float tropicAlpha = 1.0 - smoothstep(0.06, 0.26, tropicDist);
+
+              // 4. Indian Ocean 309x421 Canonical Data Domain Boundary Box
+              // Domain: lat [-45.0, 32.0], lon [20.0, 125.0]
+              bool inLonSpan = (lonDeg >= 19.8 && lonDeg <= 125.2);
+              bool inLatSpan = (latDeg >= -45.2 && latDeg <= 32.2);
+              float distLatBound = min(abs(latDeg - 32.0), abs(latDeg - (-45.0)));
+              float distLonBound = min(abs(lonDeg - 20.0), abs(lonDeg - 125.0));
+
+              float domainLatLine = inLonSpan ? (1.0 - smoothstep(0.06, 0.32, distLatBound)) : 0.0;
+              float domainLonLine = inLatSpan ? (1.0 - smoothstep(0.06, 0.32, distLonBound)) : 0.0;
+              float domainBoxAlpha = max(domainLatLine, domainLonLine);
+
+              // 5. Regional 5° subgrid inside Indian Ocean Data Domain
+              float subgridAlpha = 0.0;
+              if (inLonSpan && inLatSpan) {
+                float latDist5 = abs(fract(latDeg / 5.0 + 0.5) - 0.5) * 5.0;
+                float lonDist5 = abs(fract(lonDeg / 5.0 + 0.5) - 0.5) * 5.0;
+                subgridAlpha = (1.0 - smoothstep(0.04, 0.20, min(latDist5, lonDist5))) * 0.40;
+              }
+
+              // 6. 0.25° Canonical Data Cell Squares (True 309x421 Observation Matrix)
+              float dataCellAlpha = 0.0;
+              if (inLonSpan && inLatSpan) {
+                float latDist025 = abs(fract((latDeg - (-44.991667)) / 0.25081 + 0.5) - 0.5) * 0.25081;
+                float lonDist025 = abs(fract((lonDeg - 20.008333) / 0.25 + 0.5) - 0.5) * 0.25;
+                float dCell = min(latDist025, lonDist025);
+
+                // Screen-space antialiased line width in degrees
+                float fw = max(fwidth(latDeg), fwidth(lonDeg)) + 0.0001;
+                float cellLine = 1.0 - smoothstep(0.0, fw * 1.3, dCell);
+
+                // Gracefully fade in as zoom gets closer (when cell is at least 5 pixels wide on screen)
+                float cellPx = 0.25 / fw;
+                float zoomFade = smoothstep(5.0, 18.0, cellPx);
+                dataCellAlpha = cellLine * zoomFade * 0.48;
+              }
+
+              // Blend grid into final color
+              vec3 cGridStandard = vec3(0.0, 0.72, 0.98); // Cyan
+              vec3 cGridMajor = vec3(0.0, 0.95, 1.0);    // Electric cyan
+              vec3 cDomainBox = vec3(0.22, 0.88, 1.0);    // Bright cyan border
+
+              vec3 compositeGridColor = mix(cGridStandard, cGridMajor, majorAlpha);
+              compositeGridColor = mix(compositeGridColor, cDomainBox, domainBoxAlpha);
+
+              float totalGridAlpha = max(grid10Alpha * 0.55, max(majorAlpha * 0.90, max(tropicAlpha * 0.65, max(domainBoxAlpha * 0.95, max(subgridAlpha, dataCellAlpha)))));
+              gl_FragColor.rgb = mix(gl_FragColor.rgb, compositeGridColor, totalGridAlpha);
+            }
           }
         `,
       }),
-    [variable, earthMap, waterMask, texBathymetry, overlayStrength]
+    [variable, earthMap, waterMask, texBathymetry, texBathymetryRelief, overlayStrength]
   )
 
   // ─── SST (temperature, depth=0): authoritative three-state real OISST path ───
@@ -1148,10 +1322,11 @@ function OceanShader({
 
   material.uniforms.uDepth.value = depth
   material.uniforms.uMonthPhase.value = (timeIndex / 12) * Math.PI * 2
-  material.uniforms.uVariable.value = ['temperature', 'salinity', 'chlorophyll', 'currents'].indexOf(variable)
+  material.uniforms.uVariable.value = ['temperature', 'salinity', 'chlorophyll', 'currents', 'bathymetry'].indexOf(variable)
   material.uniforms.uOverlayStrength.value = overlayStrength
   material.uniforms.uTsunamiActive.value = tsunamiActive ? 1.0 : 0.0
   material.uniforms.uTsunamiHour.value = tsunamiHour
+  material.uniforms.uShowGraticule.value = showGraticule ? 1.0 : 0.0
   // Drive the SST authoritative gate every frame (so it immediately reflects variable/depth changes)
   material.uniforms.uIsTempSurface.value = (variable === 'temperature' && depth <= 0) ? 1.0 : 0.0
 
@@ -1715,6 +1890,7 @@ export interface GlobeSceneProps {
   showGraticule?: boolean
   showIslandLabels?: boolean
   showHotspots?: boolean
+  isAutoRotating?: boolean
   onInstrument: (instrument: Instrument) => void
   onSelectPoint?: (selection: Selection) => void
   onSelectStation?: (station: CoastalStation) => void
@@ -1787,6 +1963,7 @@ function Scene({
   showGraticule = true,
   showIslandLabels = true,
   showHotspots = false,
+  isAutoRotating = false,
   onInstrument,
   onSelectPoint,
   onSelectStation,
@@ -1800,10 +1977,19 @@ function Scene({
 
   const handleGlobeClick = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation()
-    if (!isSelectingArea || !groupRef.current || !onAreaCornerSelect) return
-    const localPoint = groupRef.current.worldToLocal(event.point.clone())
-    const coord = vector3ToLatLng(localPoint)
-    onAreaCornerSelect(coord)
+    // Event delta guard: dragging the globe to rotate should not trigger point click
+    if (event.delta > 4) return
+    if (isSelectingArea && groupRef.current && onAreaCornerSelect) {
+      const localPoint = groupRef.current.worldToLocal(event.point.clone())
+      const coord = vector3ToLatLng(localPoint)
+      onAreaCornerSelect(coord)
+      return
+    }
+    if (groupRef.current && onSelectPoint) {
+      const localPoint = groupRef.current.worldToLocal(event.point.clone())
+      const coord = vector3ToLatLng(localPoint)
+      onSelectPoint(coord)
+    }
   }
 
   const handleGlobePointerMove = (event: ThreeEvent<PointerEvent>) => {
@@ -1840,6 +2026,7 @@ function Scene({
           tsunamiActive={isTsunamiActive}
           tsunamiScenario={tsunamiScenario}
           tsunamiHour={tsunamiHour}
+          showGraticule={showGraticule}
         />
 
         {/* Interactive Bounding Box / Area Selector */}
@@ -1850,16 +2037,14 @@ function Scene({
           isSelecting={isSelectingArea}
         />
 
-        {/* Invisible raycast sphere for clicks and precision hover (only active during area selection) */}
-        {isSelectingArea && (
-          <mesh
-            onClick={handleGlobeClick}
-            onPointerMove={handleGlobePointerMove}
-          >
-            <sphereGeometry args={[RADIUS + 0.008, 96, 96]} />
-            <meshBasicMaterial transparent opacity={0} />
-          </mesh>
-        )}
+        {/* Surface raycast sphere for clicks and precision hover (active for both normal explore selection and area selection) */}
+        <mesh
+          onClick={handleGlobeClick}
+          onPointerMove={handleGlobePointerMove}
+        >
+          <sphereGeometry args={[RADIUS + 0.008, 96, 96]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
 
         {/* High-Precision Natural Earth Vector Overlays (Coastlines, International Borders, Coral Atolls/Islands & Lat/Lon Graticule) */}
         <VectorGlobeOverlays
@@ -1868,6 +2053,7 @@ function Scene({
           showIslands={showVectorBorders}
           showGraticule={showGraticule}
           showIslandLabels={showIslandLabels}
+          selection={selection}
         />
 
         {/* Indian Ocean Digital Twin Observation Boundary [20°E-125°E, 45°S-32°N] (shown only when data overlay active) */}
@@ -1951,7 +2137,7 @@ function Scene({
         enableDamping
         dampingFactor={0.06}
         enableRotate={!isSelectingArea}
-        autoRotate={mode === 'explore' && !teleportNonce && !isSelectingArea && !activeBoundary && !anchorCorner}
+        autoRotate={Boolean(isAutoRotating) && mode === 'explore' && !teleportNonce && !isSelectingArea && !activeBoundary && !anchorCorner}
         autoRotateSpeed={0.18}
       />
     </>

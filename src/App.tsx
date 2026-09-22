@@ -9,14 +9,17 @@ import {
   Eye,
   EyeOff,
   Globe2,
+  Grid,
   Layers3,
   Lock,
   MapPin,
+  Mountain,
   Navigation,
   Pause,
   Play,
   Radio,
   RotateCcw,
+  RotateCw,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -131,6 +134,7 @@ export default function App() {
   // Derived monthIndex (0..299) computed from canonical timestamp for backward compatibility
   const monthIndex = useMemo(() => timestampToMonthIndex(selectedTimestamp), [selectedTimestamp])
   const [isPlaying, setIsPlaying] = useState<boolean>(true)
+  const [isGlobeSpinning, setIsGlobeSpinning] = useState<boolean>(false)
   const [selection, setSelection] = useState<Selection>({ latitude: 3.316, longitude: 95.854 })
   const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
   const [teleportNonce, setTeleportNonce] = useState<number>(0)
@@ -213,6 +217,11 @@ export default function App() {
         setIsSelectingArea(false)
         setAnchorCorner(null)
         setHoverCorner(null)
+      } else if (
+        (e.key === 'g' || e.key === 'G') &&
+        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
+      ) {
+        setShowGraticule((v) => !v)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -349,6 +358,8 @@ export default function App() {
   const handlePointSelect = (coord: Selection) => {
     setSelection(coord)
     setSelectedInstrument(null)
+    setActiveBoundary(null)
+    setTeleportNonce(Date.now())
   }
 
   const handleInstrumentSelect = (inst: Instrument) => {
@@ -464,6 +475,7 @@ export default function App() {
             showGraticule={showGraticule}
             showIslandLabels={showIslandLabels}
             showHotspots={showSpecialSpots}
+            isAutoRotating={isGlobeSpinning}
             onInstrument={handleInstrumentSelect}
             onSelectPoint={handlePointSelect}
             onSelectStation={handleStationSelect}
@@ -476,16 +488,25 @@ export default function App() {
 
 
 
-      {/* Zen Mode Unhide Button */}
+      {/* Zen Mode Floating Quick Controls */}
       {zenMode && (
-        <button
-          className="icon-btn glass"
-          style={{ position: 'absolute', top: 20, right: 20, zIndex: 50 }}
-          onClick={() => setZenMode(false)}
-          title="Show UI"
-        >
-          <Eye size={16} />
-        </button>
+        <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 50, display: 'flex', gap: '8px' }}>
+          <button
+            className={`icon-btn glass ${showGraticule ? 'active' : ''}`}
+            onClick={() => setShowGraticule((v) => !v)}
+            title={showGraticule ? 'Hide Coordinate Grid (G)' : 'Show Coordinate Grid (G)'}
+            style={showGraticule ? { borderColor: 'rgba(0, 242, 254, 0.6)', color: '#00f2fe' } : undefined}
+          >
+            <Grid size={16} />
+          </button>
+          <button
+            className="icon-btn glass"
+            onClick={() => setZenMode(false)}
+            title="Show UI"
+          >
+            <Eye size={16} />
+          </button>
+        </div>
       )}
 
 
@@ -1107,14 +1128,33 @@ export default function App() {
                 </span>
                 <small className="brand-badge">INDIA</small>
               </div>
-              <button
-                className="zen-btn"
-                onClick={() => setZenMode(true)}
-                title="Zen Mode (Hide UI)"
-                aria-label="Hide UI"
-              >
-                <EyeOff size={13} />
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  className={`zen-btn ${showGraticule ? 'active' : ''}`}
+                  onClick={() => setShowGraticule((v) => !v)}
+                  title={showGraticule ? 'Hide Coordinate Grid (G)' : 'Show Coordinate & Verification Grid (G)'}
+                  aria-label={showGraticule ? 'Hide Coordinate Grid' : 'Show Coordinate & Verification Grid'}
+                  style={showGraticule ? { color: '#00f2fe', borderColor: 'rgba(0, 242, 254, 0.4)', background: 'rgba(0, 242, 254, 0.12)' } : undefined}
+                >
+                  <Grid size={13} />
+                </button>
+                <button
+                  className="zen-btn"
+                  onClick={() => setIsGlobeSpinning((v) => !v)}
+                  title={isGlobeSpinning ? 'Stop Globe Rotation' : 'Resume Globe Rotation'}
+                  aria-label={isGlobeSpinning ? 'Stop Globe Rotation' : 'Resume Globe Rotation'}
+                >
+                  {isGlobeSpinning ? <Pause size={13} /> : <Play size={13} />}
+                </button>
+                <button
+                  className="zen-btn"
+                  onClick={() => setZenMode(true)}
+                  title="Zen Mode (Hide UI)"
+                  aria-label="Hide UI"
+                >
+                  <EyeOff size={13} />
+                </button>
+              </div>
             </div>
 
             {/* Mode Navigation Buttons (Monochrome Black & White) */}
@@ -1250,6 +1290,21 @@ export default function App() {
                   </div>
                   <i style={{ color: '#ffffff' }} />
                 </button>
+                <button
+                  className={`var-pill ${variable === 'bathymetry' && overlayStrength > 0 ? 'active' : ''}`}
+                  onClick={() => {
+                    setVariable('bathymetry')
+                    if (overlayStrength === 0) setOverlayStrength(0.85)
+                    if (mode === 'currents') setMode('explore')
+                  }}
+                  title="NOAA ETOPO 60s Bedrock Elevation & Continental Shelf Bathymetry"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Mountain size={13} />
+                    <span>Ocean Bed</span>
+                  </div>
+                  <i style={{ color: '#ffffff' }} />
+                </button>
               </div>
             </div>
 
@@ -1300,6 +1355,20 @@ export default function App() {
               </div>
 
               <button
+                className={`dock-toggle-item ${isGlobeSpinning ? 'active' : ''}`}
+                onClick={() => setIsGlobeSpinning((v) => !v)}
+                title="Toggle Globe Automatic Planetary Spin"
+              >
+                <div className="toggle-left">
+                  <RotateCw size={13} color={isGlobeSpinning ? '#ffffff' : '#94a3b8'} />
+                  <span>Globe Auto-Spin</span>
+                </div>
+                <span className={`status-pill ${isGlobeSpinning ? 'on' : 'off'}`}>
+                  {isGlobeSpinning ? 'ROTATING' : 'STOPPED'}
+                </span>
+              </button>
+
+              <button
                 className={`dock-toggle-item ${showSpecialSpots ? 'active' : ''}`}
                 onClick={() => setShowSpecialSpots((v) => !v)}
                 title="Toggle Special Ocean Spots & Upwellings (Oman, Java Trench, Sunda, etc.)"
@@ -1344,11 +1413,11 @@ export default function App() {
               <button
                 className={`dock-toggle-item ${showGraticule ? 'active' : ''}`}
                 onClick={() => setShowGraticule((v) => !v)}
-                title="Toggle 10° Spherical Lat/Lon Coordinate Grid"
+                title="Toggle Spherical Lat/Lon Coordinate Grid, 309x421 Indian Ocean Domain & 0.25° Cell Inspector (G)"
               >
                 <div className="toggle-left">
-                  <Globe2 size={13} color={showGraticule ? '#ffffff' : '#64748b'} />
-                  <span>Lat/Lon Grid</span>
+                  <Grid size={13} color={showGraticule ? '#00f2fe' : '#94a3b8'} />
+                  <span>Coordinate & Data Grid</span>
                 </div>
                 <span className={`status-pill ${showGraticule ? 'on' : 'off'}`}>
                   {showGraticule ? 'SHOWN' : 'HIDDEN'}

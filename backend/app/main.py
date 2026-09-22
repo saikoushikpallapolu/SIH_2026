@@ -106,6 +106,7 @@ _godas_curr_ds: Any = None
 _godas_dens_ds: Any = None
 _godas_date_index: dict[str, int] = {}
 _godas_depths: list[int] = []
+CUBE_DEPTH_LEVELS = [0, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000]
 
 # Global handle for ESA OC-CCI Chlorophyll dataset
 _cci_chl_ds: Any = None
@@ -1063,7 +1064,15 @@ def get_slice(
             temp_mem = get_temp_memmap()
             if temp_mem is not None:
                 cube_3d = temp_mem[month]
-                slice_data = np.array(cube_3d[0], dtype=np.float32)
+                k = int(np.searchsorted(CUBE_DEPTH_LEVELS, depth))
+                if k == 0:
+                    slice_data = np.array(cube_3d[0], dtype=np.float32)
+                elif k >= len(CUBE_DEPTH_LEVELS):
+                    slice_data = np.array(cube_3d[-1], dtype=np.float32)
+                else:
+                    d0, d1 = CUBE_DEPTH_LEVELS[k - 1], CUBE_DEPTH_LEVELS[k]
+                    frac = float((depth - d0) / (d1 - d0))
+                    slice_data = (1.0 - frac) * cube_3d[k - 1].astype(np.float32) + frac * cube_3d[k].astype(np.float32)
 
     elif variable == "salinity":
         if s_ds is not None and godas_t_idx is not None:
@@ -1073,7 +1082,21 @@ def get_slice(
             sal_mem = get_sal_memmap()
             if sal_mem is not None:
                 cube_3d = sal_mem[month]
-                slice_data = np.array(cube_3d[0], dtype=np.float32)
+                k = int(np.searchsorted(CUBE_DEPTH_LEVELS, depth))
+                if k == 0:
+                    slice_data = np.array(cube_3d[0], dtype=np.float32)
+                elif k >= len(CUBE_DEPTH_LEVELS):
+                    slice_data = np.array(cube_3d[-1], dtype=np.float32)
+                else:
+                    d0, d1 = CUBE_DEPTH_LEVELS[k - 1], CUBE_DEPTH_LEVELS[k]
+                    frac = float((depth - d0) / (d1 - d0))
+                    slice_data = (1.0 - frac) * cube_3d[k - 1].astype(np.float32) + frac * cube_3d[k].astype(np.float32)
+
+    elif variable == "bathymetry":
+        bath_mem = get_bath_memmap()
+        if bath_mem is not None:
+            slice_data = np.array(bath_mem, dtype=np.float32)
+            data_source = "NOAA-ETOPO-Bedrock"
 
     elif variable == "chlorophyll":
         ds = get_cci_chl_dataset()

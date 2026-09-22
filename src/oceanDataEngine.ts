@@ -1504,6 +1504,13 @@ export const SCIENTIFIC_PALETTES = {
     range: [0.0, 2.0],
     unit: 'm/s',
   },
+  bathymetry: {
+    name: 'Ocean Bed (ETOPO Bedrock Relief)',
+    description: 'Seafloor Bathymetry, Trenches & Continental Shelves',
+    stops: ['#020817', '#0c2340', '#1d4ed8', '#0284c7', '#38bdf8', '#7dd3fc', '#bae6fd'],
+    range: [-8000, 0],
+    unit: 'm',
+  },
 }
 
 /**

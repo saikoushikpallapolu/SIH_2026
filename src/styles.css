@@ -145,6 +145,13 @@ button {
   border-color: #ffffff;
 }
 
+.zen-btn.active {
+  background: rgba(0, 242, 254, 0.15);
+  color: #00f2fe;
+  border-color: rgba(0, 242, 254, 0.5);
+  box-shadow: 0 0 10px rgba(0, 242, 254, 0.25);
+}
+
 .dock-nav-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

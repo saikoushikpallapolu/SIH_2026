@@ -1,4 +1,4 @@
-export type OceanVariable = 'temperature' | 'salinity' | 'chlorophyll' | 'currents'
+export type OceanVariable = 'temperature' | 'salinity' | 'chlorophyll' | 'currents' | 'bathymetry'
 export type ViewMode = 'explore' | 'currents' | 'tsunami' | 'dive' | 'analysis'
 
 export interface Instrument {
