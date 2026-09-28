@@ -24,6 +24,7 @@ import {
   type SampleStatus,
 } from './oceanDataEngine'
 import type { OceanVariable, Selection, SpatialBoundary, TerrainSliceData } from './types'
+import { MarineFaunaEcosystem } from './MarineFaunaEcosystem'
 
 export interface DiveTelemetry {
   depth: number
@@ -83,21 +84,52 @@ const worldLimit = 120
  */
 function getElevationY(elev: number): number {
   if (elev >= 0) {
-    // Land rises from 0 at shoreline up to +24 at mountain summits
-    return Math.min(1.0, elev / 1800.0) * 24.0
+    // Land rises from 0 at shoreline up to +22 at mountain summits
+    return Math.min(1.0, elev / 1800.0) * 22.0
   }
   const depth = -elev
   // Authentic non-linear bathymetric relief:
-  // Ensures continental shelf is well separated below surface waves, and canyons have dramatic slope
-  if (depth <= 200) {
-    return -(depth / 200.0) * 6.5
+  // Provides generous vertical headroom on continental shelf so the seabed bedrock,
+  // reefs, kelp, and pelagic fauna can be explored with full freedom.
+  if (depth <= 70) {
+    // Nearshore & inner continental shelf (0m to 70m) -> 0 to -9.0
+    return -(depth / 70.0) * 9.0
+  } else if (depth <= 200) {
+    // Outer shelf down to shelf break (200m) -> -9.0 to -16.0
+    const t = (depth - 70.0) / 130.0
+    return -9.0 - t * 7.0
   } else if (depth <= 1500) {
+    // Continental slope: 200m to 1500m -> -16.0 to -26.0
     const t = (depth - 200.0) / 1300.0
-    return -6.5 - t * 11.5
+    return -16.0 - t * 10.0
   } else {
+    // Abyssal plain: 1500m to 5000m -> -26.0 to -34.0
     const t = Math.min(1.0, (depth - 1500.0) / 3500.0)
-    return -18.0 - t * 7.0
+    return -26.0 - t * 8.0
   }
+}
+
+/**
+ * Exact inverse of getElevationY: translates 3D camera Y position
+ * into accurate physical ocean depth in meters down to seabed bedrock.
+ */
+function getYToDepth(y: number, seabedDepth_m: number): number {
+  if (y >= 0) return 0
+  const absY = -y
+  if (absY <= 9.0) {
+    const d = (absY / 9.0) * 70.0
+    return Math.min(seabedDepth_m, Math.round(d))
+  }
+  if (absY <= 16.0) {
+    const d = 70.0 + ((absY - 9.0) / 7.0) * 130.0
+    return Math.min(seabedDepth_m, Math.round(d))
+  }
+  if (absY <= 26.0) {
+    const d = 200.0 + ((absY - 16.0) / 10.0) * 1300.0
+    return Math.min(seabedDepth_m, Math.round(d))
+  }
+  const d = 1500.0 + ((absY - 26.0) / 8.0) * 3500.0
+  return Math.min(seabedDepth_m, Math.round(d))
 }
 
 /**
@@ -372,21 +404,43 @@ function Terrain({
           varying vec3 vColor;
           varying float vElevation;
 
-          float hash21(vec2 p) {
-            p = fract(p * vec2(123.34, 456.21));
-            p += dot(p, p + 45.32);
-            return fract(p.x * p.y);
+          vec2 hash22(vec2 p) {
+            p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+            return fract(sin(p) * 43758.5453);
           }
 
-          float causticNoise(vec2 p) {
-            vec2 i = floor(p);
+          // Voronoi distance-to-edge caustic network (InVictus / OceanViz inspired)
+          float voronoiCaustic(vec2 p) {
+            vec2 n = floor(p);
             vec2 f = fract(p);
-            f = f * f * (3.0 - 2.0 * f);
-            float a = hash21(i);
-            float b = hash21(i + vec2(1.0, 0.0));
-            float c = hash21(i + vec2(0.0, 1.0));
-            float d = hash21(i + vec2(1.0, 1.0));
-            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+            float md = 8.0;
+            vec2 m_point;
+            for (int j = -1; j <= 1; j++) {
+              for (int i = -1; i <= 1; i++) {
+                vec2 g = vec2(float(i), float(j));
+                vec2 o = hash22(n + g);
+                o = 0.5 + 0.38 * sin(time * 1.5 + 6.2831 * o);
+                vec2 r = g + o - f;
+                float d = dot(r, r);
+                if (d < md) {
+                  md = d;
+                  m_point = r;
+                }
+              }
+            }
+            float md2 = 8.0;
+            for (int j = -2; j <= 2; j++) {
+              for (int i = -2; i <= 2; i++) {
+                vec2 g = vec2(float(i), float(j));
+                vec2 o = hash22(n + g);
+                o = 0.5 + 0.38 * sin(time * 1.5 + 6.2831 * o);
+                vec2 r = g + o - f;
+                if (dot(m_point - r, m_point - r) > 0.0001) {
+                  md2 = min(md2, dot(0.5 * (m_point + r), normalize(r - m_point)));
+                }
+              }
+            }
+            return clamp(1.0 - smoothstep(0.02, 0.26, md2), 0.0, 1.0);
           }
 
           void main() {
@@ -394,25 +448,27 @@ function Terrain({
             vec3 L = normalize(vec3(0.35, 0.88, 0.38));
             float NdotL = max(0.0, dot(N, L));
 
-            // Depth light extinction: sunlight dies out rapidly below 35-50m
+            // Depth light extinction: sunlight dies out gradually across the photic zone
             float depth = max(0.0, -vElevation);
-            float sunExtinction = exp(-depth / 38.0);
+            float sunExtinction = exp(-depth / 50.0);
             
             // Ambient light: dim in abyss, warm in shallows
-            vec3 ambient = vColor * mix(vec3(0.03, 0.06, 0.10), vec3(0.55, 0.65, 0.70), sunExtinction);
-            vec3 diffuse = vColor * vec3(1.0, 0.95, 0.85) * NdotL * sunExtinction * 1.6;
+            vec3 ambient = vColor * mix(vec3(0.04, 0.08, 0.14), vec3(0.60, 0.70, 0.75), sunExtinction);
+            vec3 diffuse = vColor * vec3(1.0, 0.96, 0.88) * NdotL * sunExtinction * 1.8;
             vec3 baseColor = ambient + diffuse;
 
-            // Animated sun caustics dancing ONLY across the shallow ocean bed (< 35m)
+            // Animated Voronoi sun caustics dancing across the seabed down to 140m
             if (vElevation < 0.0) {
-              float causticFade = clamp(1.0 - depth / 35.0, 0.0, 1.0);
-              if (causticFade > 0.01) {
+              float causticFade = clamp(1.0 - depth / 140.0, 0.0, 1.0);
+              if (causticFade > 0.005) {
                 vec2 dir = length(uCurrentDir) > 0.01 ? normalize(uCurrentDir) : vec2(0.85, 0.35);
-                vec2 cUv = vWorldPos.xz * 0.32 + dir * time * 0.42;
-                float c1 = causticNoise(cUv * 3.4);
-                float c2 = causticNoise(cUv * 6.8 - dir * time * 0.25);
-                float caustic = pow(c1 * 0.6 + c2 * 0.4, 2.2) * 2.6;
-                baseColor += vec3(0.55, 0.88, 0.95) * caustic * causticFade * max(0.0, N.y);
+                vec2 crossDir = vec2(-dir.y, dir.x);
+                vec2 cUv1 = vWorldPos.xz * 0.42 + dir * time * 0.32;
+                vec2 cUv2 = vWorldPos.xz * 0.85 - crossDir * time * 0.22;
+                float c1 = voronoiCaustic(cUv1);
+                float c2 = voronoiCaustic(cUv2);
+                float caustic = pow(c1 * 0.65 + c2 * 0.45, 1.6) * 3.6;
+                baseColor += vec3(0.58, 0.94, 1.0) * caustic * causticFade * max(0.05, N.y);
               }
             }
 
@@ -469,8 +525,14 @@ function Terrain({
  */
 function OceanSurface({
   currents = { u: 0.35, v: 0.18, speed: 0.42 },
+  fogColor = '#03455b',
+  fogNear = 4,
+  fogFar = 95,
 }: {
   currents?: { u: number; v: number; speed: number }
+  fogColor?: string
+  fogNear?: number
+  fogFar?: number
 }) {
   const currentDir = useMemo(() => {
     const v = new THREE.Vector2(currents.u, currents.v)
@@ -489,6 +551,9 @@ function OceanSurface({
           time: { value: 0 },
           uCurrentDir: { value: currentDir },
           uSpeed: { value: currents.speed },
+          uFogColor: { value: new THREE.Color(fogColor) },
+          uFogNear: { value: fogNear },
+          uFogFar: { value: fogFar },
         },
         vertexShader: `
           uniform float time;
@@ -542,6 +607,9 @@ function OceanSurface({
           uniform float time;
           uniform vec2 uCurrentDir;
           uniform float uSpeed;
+          uniform vec3 uFogColor;
+          uniform float uFogNear;
+          uniform float uFogFar;
           varying vec2 vUv;
           varying vec3 vWorldPos;
           varying vec3 vNormalWorld;
@@ -572,23 +640,41 @@ function OceanSurface({
 
             // True double-sided orientation: correct normal for viewer side
             bool isAbove = cameraPosition.y >= 0.0;
-            if (!isAbove) N = -N;
 
-            // Physical Fresnel reflection (Schlick's approximation)
+            if (!isAbove) {
+              // Realistic Snell's Window: when looking up from underwater, light enters
+              // through a circular cone (~48.6° critical angle). Outside it, total internal reflection occurs.
+              float cosTheta = dot(vec3(0.0, -1.0, 0.0), V);
+              float snellWindow = smoothstep(0.52, 0.76, cosTheta);
+
+              // Inside Snell's Window: luminous sunlit sky with wave caustics
+              vec3 skyAperture = mix(vec3(0.04, 0.42, 0.60), vec3(0.68, 0.92, 1.0), snellWindow);
+              // Outside Snell's Window: total internal reflection (TIR) of deep oceanic water
+              vec3 tirColor = vec3(0.008, 0.06, 0.12);
+              
+              vec3 underwaterSurface = mix(tirColor, skyAperture, snellWindow);
+
+              // Specular sun glint from below through Snell's window
+              vec3 L = normalize(vec3(0.35, 0.90, 0.38));
+              vec3 H = normalize(L + V);
+              float sunGlint = pow(max(0.0, dot(vec3(0.0, -1.0, 0.0), H)), 64.0) * 2.2 * snellWindow;
+              underwaterSurface += vec3(1.0, 0.98, 0.90) * sunGlint;
+
+              // Shimmering wave ripples along underside
+              underwaterSurface += vec3(0.2, 0.6, 0.8) * (causticRipples - 0.5) * 0.12 * snellWindow;
+
+              float dist = length(cameraPosition - vWorldPos);
+              float fogFactor = smoothstep(uFogNear, uFogFar, dist);
+              vec3 finalColor = mix(underwaterSurface, uFogColor, fogFactor);
+              float alpha = mix(0.40, 0.92, 1.0 - snellWindow * 0.55);
+
+              gl_FragColor = vec4(finalColor, clamp(alpha, 0.25, 0.95));
+              return;
+            }
+
+            // Above-water surface rendering
             float NdotV = max(0.0, dot(N, V));
             float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 4.5);
-
-            // Drifting current ripples & streaks oriented along local current vector
-            vec2 driftUv = vWorldPos.xz * 0.35 + dir * time * (0.24 + uSpeed * 0.40);
-            float n1 = waterNoise(driftUv * 3.2);
-            float n2 = waterNoise(driftUv * 6.5 - dir * time * 0.35);
-            float causticRipples = n1 * 0.6 + n2 * 0.4;
-
-            // Current streaks / windrows (elongated fluid lines flowing along current direction)
-            vec2 crossDir = vec2(-dir.y, dir.x);
-            float streakCoord = dot(vWorldPos.xz, crossDir) * 0.45;
-            float streakFlow = dot(vWorldPos.xz, dir) * 0.20 - time * (0.35 + uSpeed * 0.75);
-            float currentStreak = pow(sin(streakCoord + sin(streakFlow * 0.5) * 1.5) * 0.5 + 0.5, 4.0) * 0.35;
 
             // Specular sun glint (sun position overhead)
             vec3 L = normalize(vec3(0.35, 0.90, 0.38));
@@ -611,25 +697,25 @@ function OceanSurface({
             waterColor += vec3(1.0, 0.98, 0.90) * sunGlint; // Sunlight glint
             waterColor = mix(waterColor, foamColor, foam * 0.75); // Foam crests & streaks
 
-            // FRESNEL TRANSPARENCY:
-            // Looking straight down into the water: opacity is ONLY 0.16 to 0.20!
-            // -> Allows the user to clearly see the golden ocean bed and bathymetry through the water!
-            // Looking towards the horizon: opacity rises smoothly to 0.80 with sky reflection and waves.
-            float alpha = isAbove
-              ? mix(0.16, 0.80, fresnel) + foam * 0.32
-              : mix(0.24, 0.70, fresnel);
+            float dist = length(cameraPosition - vWorldPos);
+            float fogFactor = smoothstep(uFogNear, uFogFar, dist);
+            vec3 finalColor = mix(waterColor, uFogColor, fogFactor);
+            float alpha = mix(0.16, 0.80, fresnel) + foam * 0.32;
 
-            gl_FragColor = vec4(waterColor, clamp(alpha, 0.12, 0.92));
+            gl_FragColor = vec4(finalColor, clamp(alpha, 0.12, 1.0));
           }
         `,
       }),
-    [currentDir, currents.speed]
+    [currentDir, currents.speed, fogColor, fogNear, fogFar]
   )
 
   useFrame(({ clock }) => {
     material.uniforms.time.value = clock.getElapsedTime()
     material.uniforms.uCurrentDir.value = currentDir
     material.uniforms.uSpeed.value = currents.speed
+    material.uniforms.uFogColor.value.set(fogColor)
+    material.uniforms.uFogNear.value = fogNear
+    material.uniforms.uFogFar.value = fogFar
   })
 
   return (
@@ -752,13 +838,13 @@ function createFishGeometry(): THREE.BufferGeometry {
   return geom
 }
 
-const TOTAL_MAX_FISH = 1500
+const TOTAL_MAX_FISH = 360
 
 /**
  * High-Performance Instanced Fish Flocking & Baitball Simulation Engine.
- * Modulates between dense swirling baitball vortices (1,200 to 1,500 fish) in rich chlorophyll upwelling hotspots (>1.4 mg/m3)
- * and sparse solitary fish in oligotrophic ocean deserts (<0.2 mg/m3).
- * Uses direct column-major TypedArray matrix writes for ultra-fluid 60 FPS performance with zero heap allocation.
+ * Features 2 distinct, cohesive shoals (pelagic mackerel & deep baitball) with
+ * Reynolds schooling cohesion, leaving 85% of the visual water column clear and majestic.
+ * Uses direct column-major TypedArray matrix writes for ultra-fluid 60 FPS performance.
  */
 function FishSchools({
   chlorophyll,
@@ -774,35 +860,29 @@ function FishSchools({
   
   // Calculate dynamic active fish count and behavior based on local chlorophyll and depth
   const biomass = useMemo(() => computeMarineBiomass(chlorophyll, depth), [chlorophyll, depth])
-  const activeCount = Math.min(TOTAL_MAX_FISH, biomass.estimated_fish_count)
+  const activeCount = Math.min(TOTAL_MAX_FISH, Math.max(120, Math.round(biomass.estimated_fish_count * 0.28)))
   const isBaitball = biomass.school_activity === 'Swarming Baitball' || biomass.school_activity === 'Feeding Frenzy'
   const prevCountRef = useRef(0)
 
-  // 8 dynamic school centroid orbits across multiple depths and radii
+  // 2 distinct, cohesive shoals positioned along natural oceanic swimming corridors
   const schoolCentroids = useMemo(() => [
-    { pos: new THREE.Vector3(-12, -4, 25), radius: 15, speed: 1.05, phase: 0.0, tilt: 0.25 },
-    { pos: new THREE.Vector3(18, -6, 12), radius: 18, speed: 1.15, phase: 1.8, tilt: -0.35 },
-    { pos: new THREE.Vector3(-22, -9, -15), radius: 16, speed: 0.85, phase: 3.4, tilt: 0.15 },
-    { pos: new THREE.Vector3(8, -2, -28), radius: 20, speed: 1.05, phase: 4.9, tilt: -0.20 },
-    { pos: new THREE.Vector3(0, -6, 0), radius: 13, speed: 1.40, phase: 0.8, tilt: 0.45 },
-    { pos: new THREE.Vector3(26, -11, -8), radius: 22, speed: 0.80, phase: 2.6, tilt: 0.10 },
-    { pos: new THREE.Vector3(-6, -2.5, 10), radius: 11, speed: 1.25, phase: 1.2, tilt: 0.30 },
-    { pos: new THREE.Vector3(14, -13, 20), radius: 19, speed: 0.90, phase: 5.2, tilt: -0.15 },
+    { pos: new THREE.Vector3(-24, -9.0, 24), radius: 18, speed: 0.85, phase: 0.0, tilt: 0.15 },
+    { pos: new THREE.Vector3(-32, -26.0, -18), radius: 22, speed: 0.75, phase: 2.8, tilt: -0.20 },
   ], [])
 
-  // Individual fish randomized local parameters
+  // Individual fish randomized local parameters with tight, natural school coordination
   const fishParams = useMemo(() => {
     return Array.from({ length: TOTAL_MAX_FISH }, (_, i) => {
-      const schoolIdx = i % 8
+      const schoolIdx = i % 2
       return {
         schoolIdx,
-        relRadius: 0.8 + Math.random() * 9.5,
-        orbitSpeed: 0.75 + Math.random() * 0.55,
+        relRadius: 0.6 + Math.random() * 5.5,
+        orbitSpeed: 0.85 + Math.random() * 0.35,
         phaseOffset: Math.random() * Math.PI * 2.0,
-        yOffset: (Math.random() - 0.5) * 6.5,
-        yFreq: 0.4 + Math.random() * 0.8,
-        scale: 0.65 + Math.random() * 0.55,
-        vortexTightness: 0.5 + Math.random() * 0.8,
+        yOffset: (Math.random() - 0.5) * 3.5,
+        yFreq: 0.35 + Math.random() * 0.5,
+        scale: 0.70 + Math.random() * 0.35,
+        vortexTightness: 0.6 + Math.random() * 0.5,
       }
     })
   }, [])
@@ -885,6 +965,13 @@ function FishSchools({
 
         forwardX = -Math.sin(angle)
         forwardZ = Math.cos(angle)
+      }
+
+      // Strict coastline land deflection: prevent fish from swimming onto land / disappearing into hills
+      if (x > -3.0) {
+        const overshoot = x - (-3.0)
+        x = -3.0 - overshoot * 0.7
+        forwardX = -Math.abs(forwardX)
       }
 
       // Keep fish submerged beneath the water surface (<= -0.8m)
@@ -1127,12 +1214,17 @@ function Diver({
   const lastTelemetry = useRef(0)
   const isDragging = useRef(false)
   const prevMouse = useRef({ x: 0, y: 0 })
-  const euler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'))
+  const targetEuler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'))
+  const currentEuler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'))
+  const diverVelocity = useRef(new THREE.Vector3(0, 0, 0))
+  const targetDepthY = useRef<number | null>(null)
 
   useEffect(() => {
-    camera.position.set(0, 10, 52)
-    camera.lookAt(new THREE.Vector3(0, -2, 0))
-    euler.current.setFromQuaternion(camera.quaternion)
+    // Initial spawn in open oceanic waters off Mumbai (-20, -3.5, 20)
+    camera.position.set(-20, -3.5, 20)
+    camera.lookAt(new THREE.Vector3(-20, -6.5, 0))
+    targetEuler.current.setFromQuaternion(camera.quaternion)
+    currentEuler.current.setFromQuaternion(camera.quaternion)
     const dom = gl.domElement
 
     const onMouseDown = (e: MouseEvent) => {
@@ -1149,25 +1241,34 @@ function Diver({
       const dy = e.clientY - prevMouse.current.y
       prevMouse.current = { x: e.clientX, y: e.clientY }
 
-      euler.current.y -= dx * 0.0032
-      euler.current.x = THREE.MathUtils.clamp(
-        euler.current.x - dy * 0.0032,
-        -Math.PI / 2.1,
-        Math.PI / 2.1
+      targetEuler.current.y -= dx * 0.0028
+      targetEuler.current.x = THREE.MathUtils.clamp(
+        targetEuler.current.x - dy * 0.0028,
+        -Math.PI / 2.15,
+        Math.PI / 2.15
       )
-      camera.quaternion.setFromEuler(euler.current)
     }
     const onMouseUp = () => {
       isDragging.current = false
     }
 
+    // Natural desktop scroll-to-dive controls: scrolling down dives deeper, scrolling up ascends
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      targetDepthY.current = null
+      const diveDelta = Math.sign(e.deltaY) * (keys.current.shift ? 3.5 : 1.6)
+      camera.position.y -= diveDelta
+    }
+
     dom.addEventListener('mousedown', onMouseDown)
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
+    dom.addEventListener('wheel', onWheel, { passive: false })
     return () => {
       dom.removeEventListener('mousedown', onMouseDown)
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
+      dom.removeEventListener('wheel', onWheel)
     }
   }, [camera, gl])
 
@@ -1185,24 +1286,64 @@ function Diver({
     }
   }, [])
 
+  // Listen for Quick Depth Navigation events from HUD pills
+  useEffect(() => {
+    const onQuickDive = (e: CustomEvent<{ targetY?: number; targetDepth_m?: number; targetToFloor?: boolean }>) => {
+      if (e.detail?.targetToFloor) {
+        // Direct descend down to seabed bedrock floor plus 0.25 clearance
+        targetDepthY.current = -999
+      } else if (e.detail?.targetDepth_m !== undefined) {
+        const d = e.detail.targetDepth_m
+        targetDepthY.current = d === 0 ? 0.6 : getElevationY(-d)
+      } else if (e.detail?.targetY !== undefined) {
+        targetDepthY.current = e.detail.targetY
+      }
+    }
+    window.addEventListener('ocean-quick-dive', onQuickDive as EventListener)
+    return () => {
+      window.removeEventListener('ocean-quick-dive', onQuickDive as EventListener)
+    }
+  }, [])
+
   useFrame((state, delta) => {
-    const speed = keys.current.shift ? 28 : 14
-    const forward = new THREE.Vector3()
-    camera.getWorldDirection(forward)
-    forward.y = 0
-    forward.normalize()
-    const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize()
+    // Cinematic mouse look smoothing
+    currentEuler.current.x = THREE.MathUtils.lerp(currentEuler.current.x, targetEuler.current.x, Math.min(1.0, delta * 12.0))
+    currentEuler.current.y = THREE.MathUtils.lerp(currentEuler.current.y, targetEuler.current.y, Math.min(1.0, delta * 12.0))
+    camera.quaternion.setFromEuler(currentEuler.current)
 
-    if (keys.current.w) camera.position.addScaledVector(forward, speed * delta)
-    if (keys.current.s) camera.position.addScaledVector(forward, -speed * delta)
-    if (keys.current.a) camera.position.addScaledVector(right, -speed * delta)
-    if (keys.current.d) camera.position.addScaledVector(right, speed * delta)
+    const speed = keys.current.shift ? 26 : 14
+    const lookDir = new THREE.Vector3()
+    camera.getWorldDirection(lookDir)
 
-    // Vertical controls: ascend into the air or descend into depths - NO CEILING!
+    // Horizontal vector for strafe calculation
+    const horizontalForward = new THREE.Vector3(lookDir.x, 0, lookDir.z).normalize()
+    const right = new THREE.Vector3().crossVectors(horizontalForward, camera.up).normalize()
+
+    // Vertical dive controls (Space / E = ascend; C / Q / ArrowDown = dive)
     const ascend = keys.current.arrowup || keys.current[' '] || keys.current.space || keys.current.e
     const descend = keys.current.arrowdown || keys.current.c || keys.current.q
-    if (ascend) camera.position.y += speed * delta
-    if (descend) camera.position.y -= speed * delta
+
+    // Cancel automated quick-dive glide if user inputs any movement key
+    if (keys.current.w || keys.current.s || keys.current.a || keys.current.d || ascend || descend) {
+      targetDepthY.current = null
+    }
+
+    // Desired directional movement intent vector
+    const moveIntent = new THREE.Vector3(0, 0, 0)
+    if (keys.current.w) moveIntent.add(lookDir)
+    if (keys.current.s) moveIntent.addScaledVector(lookDir, -1)
+    if (keys.current.a) moveIntent.addScaledVector(right, -1)
+    if (keys.current.d) moveIntent.add(right)
+    if (ascend) moveIntent.y += 1.0
+    if (descend) moveIntent.y -= 1.0
+
+    if (moveIntent.lengthSq() > 0.0001) {
+      moveIntent.normalize().multiplyScalar(speed)
+    }
+
+    // Silky-smooth underwater ROV fluid inertia damping (gliding momentum)
+    diverVelocity.current.lerp(moveIntent, Math.min(1.0, delta * 4.6))
+    camera.position.addScaledVector(diverVelocity.current, delta)
 
     // Geographic coordinate mapping across regional dive bounding box
     const [minLat, maxLat, minLon, maxLon] = diveBbox
@@ -1221,10 +1362,21 @@ function Diver({
     const elevM = isLand ? localSeabed.elevation_m : -seabedDepth_m
     const floorY = getElevationY(elevM)
 
+    // Smooth quick-dive descent interpolation if active
+    if (targetDepthY.current !== null) {
+      const destY = targetDepthY.current === -999 ? (floorY + 0.25) : targetDepthY.current
+      camera.position.y = THREE.MathUtils.lerp(camera.position.y, destY, delta * 3.8)
+      if (Math.abs(camera.position.y - destY) < 0.08) {
+        camera.position.y = destY
+        targetDepthY.current = null
+      }
+    }
+
     camera.position.x = THREE.MathUtils.clamp(camera.position.x, -worldLimit, worldLimit)
     camera.position.z = THREE.MathUtils.clamp(camera.position.z, -worldLimit, worldLimit)
     // Dynamic vertical constraint: camera cannot penetrate beneath seabed bedrock
-    camera.position.y = THREE.MathUtils.clamp(camera.position.y, floorY + 1.2, 75.0)
+    // 0.15m clearance allows user to touch down right onto the seabed sand!
+    camera.position.y = THREE.MathUtils.clamp(camera.position.y, floorY + 0.15, 75.0)
 
     // Direct mutable reference update with ZERO React re-renders!
     if (diverPosRef.current) {
@@ -1236,13 +1388,11 @@ function Diver({
       lastTelemetry.current = state.clock.elapsedTime
       const profile = getRegionalDiveProfile(currentLat, currentLon, monthIndex)
 
-      // When underwater (y <= 0), compute depth in meters down to seabedDepth_m.
+      // When underwater (y <= 0), compute depth in meters using authentic bathymetric curve.
       // When above water (y > 0), depth is 0 (aerial exploration).
       let depth_m = 0
       if (camera.position.y <= 0 && !isLand && seabedDepth_m > 0) {
-        const maxTravel = Math.max(0.5, -floorY)
-        const fraction = THREE.MathUtils.clamp(-camera.position.y / maxTravel, 0, 1)
-        depth_m = Math.min(seabedDepth_m, Math.round(fraction * seabedDepth_m))
+        depth_m = getYToDepth(camera.position.y, seabedDepth_m)
       }
 
       // Map depth_m to standard 16-level GODAS depth index
@@ -1696,16 +1846,16 @@ function ThermalField({
               float density = (baselineMedium + thermocline * 2.2) * shimmer * spatialFalloff * depthFalloff;
               vec3 color = temperatureColor(normalizedTemperature);
 
-              float sampleAlpha = clamp(density * 0.05, 0.0, 0.09);
+              float sampleAlpha = clamp(density * 0.008, 0.0, 0.02);
               float remaining = 1.0 - accumulatedAlpha;
               accumulatedColor += color * sampleAlpha * remaining;
               accumulatedAlpha += sampleAlpha * remaining;
 
-              if (accumulatedAlpha > 0.82) break;
+              if (accumulatedAlpha > 0.22) break;
             }
 
-            if (accumulatedAlpha < 0.004) discard;
-            gl_FragColor = vec4(accumulatedColor, accumulatedAlpha);
+            if (accumulatedAlpha < 0.002) discard;
+            gl_FragColor = vec4(accumulatedColor, accumulatedAlpha * 0.4);
           }
         `}
       />
@@ -1835,6 +1985,27 @@ function DiveWorld({
 
   const [terrainData, setTerrainData] = useState<TerrainSliceData | null>(null)
   const [godasSubgrid, setGodasSubgrid] = useState<GodasSubgridData | null>(null)
+  const [sonarActive, setSonarActive] = useState<boolean>(false)
+
+  // Listen for keyboard shortcut 'R' or UI button trigger for Acoustic Sonar Ping
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'r' || e.key === 'R') {
+        setSonarActive(true)
+        setTimeout(() => setSonarActive(false), 3200)
+      }
+    }
+    const handleCustomSonar = () => {
+      setSonarActive(true)
+      setTimeout(() => setSonarActive(false), 3200)
+    }
+    window.addEventListener('keydown', handleKey)
+    window.addEventListener('trigger-sonar-ping', handleCustomSonar)
+    return () => {
+      window.removeEventListener('keydown', handleKey)
+      window.removeEventListener('trigger-sonar-ping', handleCustomSonar)
+    }
+  }, [])
 
   // Load native ETOPO bedrock grid on mount into memory
   useEffect(() => {
@@ -1875,8 +2046,8 @@ function DiveWorld({
   )
 
   const [telemetry, setTelemetry] = useState<DiveTelemetry>(() => ({
-    depth: 0,
-    depthLevelIndex: 0,
+    depth: 15,
+    depthLevelIndex: 1,
     temperature: 28.5,
     salinity: 35.2,
     density: 1024.1,
@@ -1936,9 +2107,9 @@ function DiveWorld({
   const fogRange = useMemo(() => {
     const depth = telemetry.depth
     if (depth <= 0) return { near: 40, far: 360 }
-    if (depth > 500) return { near: 2, far: 85 }
-    if (depth > 150) return { near: 3, far: 110 }
-    return { near: 4, far: 140 }
+    if (depth > 500) return { near: 2, far: 65 }
+    if (depth > 150) return { near: 3, far: 80 }
+    return { near: 4, far: 95 }
   }, [telemetry.depth])
 
   const sunIntensity = useMemo(() => {
@@ -1969,7 +2140,7 @@ function DiveWorld({
 
   return (
     <>
-      <SkyDome />
+      {telemetry.depth <= 0 && <SkyDome />}
       <color attach="background" args={[dynamicFogColor]} />
       <fog attach="fog" args={[dynamicFogColor, fogRange.near, fogRange.far]} />
 
@@ -1993,7 +2164,12 @@ function DiveWorld({
       {/* Dynamic Sonar & Diver Exploration Spotlight */}
       <DiverHeadlight />
 
-      <OceanSurface currents={{ u: telemetry.currentU, v: telemetry.currentV, speed: telemetry.currentSpeed }} />
+      <OceanSurface
+        currents={{ u: telemetry.currentU, v: telemetry.currentV, speed: telemetry.currentSpeed }}
+        fogColor={dynamicFogColor}
+        fogNear={fogRange.near}
+        fogFar={fogRange.far}
+      />
 
       <Terrain
         selection={selection}
@@ -2015,6 +2191,14 @@ function DiveWorld({
         chlorophyll={telemetry.chlorophyll || profile.chlorophyll}
         depth={telemetry.depth}
         diverPositionRef={diverPosRef}
+      />
+
+      {/* European Union Horizon / OceanViz Production 3D Marine Ecosystem */}
+      <MarineFaunaEcosystem
+        depth={telemetry.depth}
+        currents={{ u: telemetry.currentU, v: telemetry.currentV, speed: telemetry.currentSpeed }}
+        sonarActive={sonarActive}
+        diverPos={diverPosRef.current}
       />
 
       {/* Optimized Volumetric Thermal Stratification Raymarching */}

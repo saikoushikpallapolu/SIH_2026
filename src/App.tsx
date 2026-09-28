@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Compass,
   Crosshair,
@@ -11,6 +14,7 @@ import {
   Globe2,
   Layers3,
   Lock,
+  Map as MapIcon,
   MapPin,
   Navigation,
   Pause,
@@ -27,7 +31,9 @@ import {
   Zap,
 } from 'lucide-react'
 import GlobeScene from './GlobeScene'
+import TiledMapGlobe from './TiledMapGlobe'
 import ImmersiveOcean, { type DiveTelemetry } from './ImmersiveOcean'
+import MissionAnalyticsTray, { computeCycloneIndices } from './MissionAnalyticsTray'
 import catalogData from '../data/processed/observations/instruments_catalog.json'
 import type { Instrument as CatalogInstrument } from './types'
 const instruments = catalogData as CatalogInstrument[]
@@ -108,6 +114,7 @@ export default function App() {
     } catch {}
     return 'explore'
   })
+  const [mapEngine, setMapEngine] = useState<'tiled' | 'planetarium'>('tiled')
   const [variable, setVariable] = useState<OceanVariable>(() => {
     try {
       const p = new URLSearchParams(window.location.search).get('mode')
@@ -141,7 +148,14 @@ export default function App() {
   const [showGraticule, setShowGraticule] = useState<boolean>(true)
   const [telemetry, setTelemetry] = useState<SubgridTelemetry | null>(null)
   const [profileOpen, setProfileOpen] = useState<boolean>(false)
+  const [analyticsOpen, setAnalyticsOpen] = useState<boolean>(false)
+  const [leftDockCollapsed, setLeftDockCollapsed] = useState<boolean>(false)
+  const [rightDockCollapsed, setRightDockCollapsed] = useState<boolean>(false)
   const [zenMode, setZenMode] = useState<boolean>(false)
+  const cycloneIndices = useMemo(
+    () => computeCycloneIndices(telemetry?.ctd_profile?.temperatures || []),
+    [telemetry]
+  )
   const [diveTelemetry, setDiveTelemetry] = useState<DiveTelemetry>({
     depth: 24,
     depthLevelIndex: 2,
@@ -434,6 +448,46 @@ export default function App() {
             }}
             onExit={() => setMode('explore')}
           />
+        ) : mapEngine === 'tiled' ? (
+          <TiledMapGlobe
+            variable={variable}
+            depth={depth}
+            timestamp={selectedTimestamp}
+            timeIndex={monthIndex}
+            mode={mode}
+            overlayStrength={overlayStrength}
+            instruments={showInstruments ? instruments : []}
+            selection={selection}
+            teleportNonce={teleportNonce}
+            showVectorArrows={showVectorArrows}
+            showCurrentLabels={showCurrentLabels}
+            showStreamlines={showStreamlines}
+            showParticles={showParticles}
+            flowIntensity={flowIntensity}
+            flowSpeed={flowSpeed}
+            showIsochrones={showIsochrones}
+            tsunamiHour={tsunamiHour}
+            tsunamiScenario={activeScenario}
+            selectedStation={selectedStation}
+            isSelectingArea={isSelectingArea}
+            activeBoundary={activeBoundary}
+            anchorCorner={anchorCorner}
+            hoverCorner={hoverCorner}
+            showVectorBorders={showVectorBorders}
+            showGraticule={showGraticule}
+            showIslandLabels={showIslandLabels}
+            showHotspots={showSpecialSpots}
+            onInstrument={handleInstrumentSelect}
+            onSelectPoint={handlePointSelect}
+            onSelectStation={handleStationSelect}
+            onSelectCurrentSystem={handleCurrentSystemSelect}
+            onAreaCornerSelect={handleAreaCornerSelect}
+            onAreaHover={handleAreaHover}
+            onLaunchDive={(lat, lon) => {
+              setSelection({ latitude: lat, longitude: lon })
+              setMode('dive')
+            }}
+          />
         ) : (
           <GlobeScene
             variable={variable}
@@ -473,7 +527,158 @@ export default function App() {
         )}
       </div>
 
+      {/* Floating Mission Control Topbar Ribbon */}
+      {!zenMode && (
+        <header className="topbar-ribbon glass">
+          <div className="brand-ribbon">
+            <span className="brand-mark">
+              <Waves size={16} />
+            </span>
+            <span className="brand-text">OceanScope</span>
+            <small className="brand-badge">MOES · INCOIS DIGITAL TWIN</small>
+          </div>
 
+          <div className="nav-capsule">
+            <button
+              className={`nav-capsule-btn ${mode === 'explore' && !hotspotsOpen ? 'active' : ''}`}
+              onClick={() => {
+                setMode('explore')
+                setHotspotsOpen(false)
+                setIsTsunamiPlaying(false)
+              }}
+            >
+              <Globe2 size={14} />
+              <span>Map & Globe</span>
+            </button>
+
+            {mode !== 'dive' && (
+              <div
+                className="engine-toggle-pill"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  background: 'rgba(10, 20, 36, 0.75)',
+                  backdropFilter: 'blur(10px)',
+                  padding: '3px',
+                  borderRadius: '20px',
+                  border: '1px solid rgba(0, 242, 254, 0.2)',
+                  gap: '2px',
+                  marginLeft: '4px',
+                }}
+              >
+                <button
+                  className={`nav-capsule-btn ${mapEngine === 'tiled' ? 'active' : ''}`}
+                  onClick={() => setMapEngine('tiled')}
+                  title="Multi-Resolution Tiled Map with 3D Globe Projection (ESRI Ocean & Satellite)"
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    borderRadius: '14px',
+                    border: 'none',
+                  }}
+                >
+                  <MapIcon size={12} color={mapEngine === 'tiled' ? '#00f2fe' : '#94a3b8'} />
+                  <span>GIS Map (LOD)</span>
+                </button>
+                <button
+                  className={`nav-capsule-btn ${mapEngine === 'planetarium' ? 'active' : ''}`}
+                  onClick={() => setMapEngine('planetarium')}
+                  title="3D Planetarium WebGL Globe"
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    borderRadius: '14px',
+                    border: 'none',
+                  }}
+                >
+                  <Globe2 size={12} color={mapEngine === 'planetarium' ? '#00f2fe' : '#94a3b8'} />
+                  <span>3D Planetarium</span>
+                </button>
+              </div>
+            )}
+
+            <button
+              className={`nav-capsule-btn ${mode === 'dive' ? 'active' : ''} ${!boundaryContainsMarine(diveBoundary) ? 'disabled-btn' : ''}`}
+              onClick={() => {
+                if (!boundaryContainsMarine(diveBoundary)) return
+                setMode('dive')
+                setHotspotsOpen(false)
+                setIsTsunamiPlaying(false)
+              }}
+              disabled={!boundaryContainsMarine(diveBoundary)}
+              title={
+                boundaryContainsMarine(diveBoundary)
+                  ? "Regional 3D Deep Dive (ETOPO Bathymetry & GODAS)"
+                  : "Selected region is inland. Select a marine zone."
+              }
+            >
+              <Compass size={14} />
+              <span>3D Deep Dive</span>
+            </button>
+
+            <button
+              className={`nav-capsule-btn ${mode === 'tsunami' ? 'active' : ''}`}
+              onClick={() => {
+                setMode('tsunami')
+                setHotspotsOpen(false)
+                setIsPlaying(false)
+                setIsTsunamiPlaying(true)
+                setSelection({ latitude: activeScenario.epicenter.latitude, longitude: activeScenario.epicenter.longitude })
+                setTeleportNonce(Date.now())
+              }}
+            >
+              <Radio size={14} />
+              <span>Tsunami Propagation</span>
+            </button>
+
+            <button
+              className={`nav-capsule-btn ${hotspotsOpen ? 'active' : ''}`}
+              onClick={() => setHotspotsOpen((v) => !v)}
+              title="Browse 18 Curated Biological Upwellings, Deep Trenches & Coral Atolls"
+            >
+              <Sparkles size={14} color="#10b981" />
+              <span>Hotspots & Biomes</span>
+            </button>
+          </div>
+
+          <div className="topbar-actions-ribbon">
+            {mode === 'tsunami' ? (
+              <div className="status-badge alert">
+                <span className="pulse red" />
+                <span>{activeScenario.shortName.toUpperCase()} SHOCKWAVE</span>
+              </div>
+            ) : mode === 'dive' ? (
+              <div className="status-badge">
+                <span className="pulse" />
+                <span>3D HYDROGRAPHIC TWIN</span>
+              </div>
+            ) : (
+              <div className="status-badge">
+                <span className="pulse" />
+                <span>25-YR ATLAS · {formatEpoch(selectedTimestamp)}</span>
+              </div>
+            )}
+
+            <button
+              className={`topbar-action-pill ${analyticsOpen ? 'active' : ''}`}
+              onClick={() => setAnalyticsOpen((v) => !v)}
+              title="Toggle Ocean-Viz Hydrographic Mission Analytics Suite"
+            >
+              <BarChart3 size={13} />
+              <span>Analytics</span>
+            </button>
+
+            <button
+              className="icon-btn"
+              onClick={() => setZenMode(true)}
+              title="Zen Mode (Hide UI)"
+              aria-label="Hide UI"
+            >
+              <EyeOff size={14} />
+            </button>
+          </div>
+        </header>
+      )}
 
       {/* Zen Mode Unhide Button */}
       {zenMode && (
@@ -628,80 +833,12 @@ export default function App() {
       {/* 3. TSUNAMI MODE: Dedicated Scenario-Driven Telemetry & Station Impact HUD */}
       {!zenMode && mode === 'tsunami' && (
         <aside className="tsunami-telemetry-card glass">
-          {/* Brand Header & Zen View Toggle */}
-          <div className="dock-brand-header">
-            <div className="brand">
-              <span className="brand-mark">
-                <Waves size={15} />
-              </span>
-              <span className="brand-text">
-                OceanScope
-              </span>
-              <small className="brand-badge">INDIA</small>
+          <div className="dock-panel-header">
+            <div className="dock-title-group">
+              <Radio size={14} color="#f43f5e" />
+              <span className="dock-title-text" style={{ color: '#fda4af' }}>EARLY WARNING & PROPAGATION</span>
             </div>
-            <button
-              className="zen-btn"
-              onClick={() => setZenMode(true)}
-              title="Zen Mode (Hide UI)"
-              aria-label="Hide UI"
-            >
-              <EyeOff size={13} />
-            </button>
-          </div>
-
-          {/* Mode Navigation Buttons (Monochrome Black & White) */}
-          <div className="dock-nav-grid">
-            <button
-              className="nav-mode-btn"
-              onClick={() => {
-                setMode('explore')
-                setHotspotsOpen(false)
-                setIsTsunamiPlaying(false)
-              }}
-            >
-              <Globe2 size={13} />
-              <span>Globe</span>
-            </button>
-            <button
-              className="nav-mode-btn active"
-              onClick={() => {
-                setMode('tsunami')
-                setHotspotsOpen(false)
-                setIsPlaying(false)
-                setIsTsunamiPlaying(true)
-                setSelection({ latitude: activeScenario.epicenter.latitude, longitude: activeScenario.epicenter.longitude })
-                setTeleportNonce(Date.now())
-              }}
-            >
-              <Radio size={13} />
-              <span>Tsunami</span>
-            </button>
-            <button
-              className={`nav-mode-btn ${!boundaryContainsMarine(diveBoundary) ? 'disabled-btn' : ''}`}
-              onClick={() => {
-                if (!boundaryContainsMarine(diveBoundary)) return
-                setMode('dive')
-                setHotspotsOpen(false)
-                setIsTsunamiPlaying(false)
-              }}
-              disabled={!boundaryContainsMarine(diveBoundary)}
-              title={
-                boundaryContainsMarine(diveBoundary)
-                  ? "Regional 3D Deep Dive"
-                  : "Selected region is inland."
-              }
-            >
-              <Compass size={13} />
-              <span>3D Dive</span>
-            </button>
-            <button
-              className={`nav-mode-btn ${hotspotsOpen ? 'active' : ''}`}
-              onClick={() => setHotspotsOpen((v) => !v)}
-              title="Browse 18 Curated Biological Upwellings, Deep Trenches & Coral Atolls"
-            >
-              <Sparkles size={13} />
-              <span>Hotspots</span>
-            </button>
+            <span className="pulse red" />
           </div>
 
           {/* Scenario Selector Dropdown */}
@@ -1052,38 +1189,78 @@ export default function App() {
                 <div className="biomass-subtext">
                   Primary Prod: <b>{diveTelemetry.biomass.primary_productivity_mg_c} mg C/m²/d</b>
                 </div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px', fontSize: '9.5px', fontFamily: 'DM Mono', color: '#94a3b8' }}>
+                  <span style={{ color: '#38bdf8' }}>◆ Manta Rays</span>
+                  <span style={{ color: '#fbbf24' }}>◆ Reef Sharks</span>
+                  <span style={{ color: '#34d399' }}>◆ Sea Turtles</span>
+                  <span style={{ color: '#ec4899' }}>◆ Coral Fans</span>
+                </div>
               </div>
             )}
+
+            {/* Quick Depth Navigation Pills */}
+            <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+              <div style={{ fontSize: '9.5px', fontFamily: 'DM Mono', color: '#94a3b8', marginBottom: '6px', letterSpacing: '0.06em', textTransform: 'uppercase', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>QUICK DEPTH</span>
+                <span style={{ color: '#38bdf8', fontSize: '9px' }}>SCROLL WHEEL / KEYS</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px' }}>
+                <button
+                  className="quick-depth-btn"
+                  onClick={() => window.dispatchEvent(new CustomEvent('ocean-quick-dive', { detail: { targetDepth_m: 0 } }))}
+                  title="Ascend to Surface Waves (0m)"
+                >
+                  ▲ 0m
+                </button>
+                <button
+                  className="quick-depth-btn"
+                  onClick={() => window.dispatchEvent(new CustomEvent('ocean-quick-dive', { detail: { targetDepth_m: 30 } }))}
+                  title="Dive to Photic Reef (30m)"
+                >
+                  🪸 30m
+                </button>
+                <button
+                  className="quick-depth-btn"
+                  onClick={() => window.dispatchEvent(new CustomEvent('ocean-quick-dive', { detail: { targetDepth_m: 65 } }))}
+                  title="Dive to Continental Shelf (65m)"
+                >
+                  🌊 65m
+                </button>
+                <button
+                  className="quick-depth-btn seabed"
+                  onClick={() => window.dispatchEvent(new CustomEvent('ocean-quick-dive', { detail: { targetToFloor: true } }))}
+                  title="Descend directly to Ocean Bed Bedrock"
+                >
+                  ⚓ Bedrock
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '8px' }}>
+              <button
+                className="dive-sonar-btn"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('trigger-sonar-ping'))
+                }}
+                title="Trigger 360° Acoustic Multibeam Sonar Scan (Shortcut: R)"
+              >
+                <Radio size={13} color="#00f2fe" />
+                <span>Multibeam Sonar Scan (R)</span>
+              </button>
+            </div>
           </section>
 
           <div className="dive-controls-hint glass" style={{ bottom: '130px' }}>
             <Compass size={13} />
             <span>
-              <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move · <kbd>↑</kbd>/<kbd>Space</kbd> Ascend into Air · <kbd>↓</kbd>/<kbd>C</kbd> Dive · Drag to Look 360° · <kbd>Shift</kbd> Turbo
+              <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 3D Swim (Look down + W to dive) · <kbd>Scroll</kbd> Dive · <kbd>Space</kbd>/<kbd>C</kbd> Vertical · <kbd>R</kbd> Multibeam Sonar · <kbd>Shift</kbd> Turbo
             </span>
           </div>
 
           <button
-            className="back-to-globe-btn glass"
+            className="back-to-globe-btn"
             onClick={() => setMode('explore')}
             title="Return to 3D Globe"
-            style={{
-              position: 'absolute',
-              top: '20px',
-              left: '20px',
-              zIndex: 30,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '10px 16px',
-              borderRadius: '10px',
-              color: '#000000',
-              background: '#ffffff',
-              border: '1px solid #ffffff',
-              cursor: 'pointer',
-              fontWeight: 700,
-              fontSize: '12px',
-            }}
           >
             ← Back to Globe
           </button>
@@ -1091,88 +1268,29 @@ export default function App() {
       )}
 
       {/* Ergonomic Side Docks: All Controls on Left & Right Flanks (100% Clear Vertical View) */}
-      {!zenMode && mode !== 'tsunami' && (
+      {!zenMode && (mode === 'explore' || mode === 'currents') && (
         <>
           {/* LEFT SIDE DOCK: Ocean Layers, Intensity/Depth Sliders & Map Annotation Toggles */}
-          <aside className="side-dock-left glass" aria-label="Layers and Display Controls">
-            {/* Brand Header & Zen View Toggle */}
-            <div className="dock-brand-header">
-              <div className="brand">
-                <span className="brand-mark">
-                  <Waves size={15} />
-                </span>
-                <span className="brand-text">
-                  OceanScope
-                </span>
-                <small className="brand-badge">INDIA</small>
+          {!leftDockCollapsed ? (
+            <aside className="side-dock-left glass" aria-label="Layers and Display Controls">
+              {/* Dock Header with Title & Collapse Button */}
+              <div className="dock-panel-header">
+                <div className="dock-title-group">
+                  <Layers3 size={14} color="#00f2fe" />
+                  <span className="dock-title-text">LAYERS & CONTROLS</span>
+                </div>
+                <button
+                  className="dock-collapse-btn"
+                  onClick={() => setLeftDockCollapsed(true)}
+                  title="Collapse Left Panel"
+                  aria-label="Collapse Left Panel"
+                >
+                  <ChevronLeft size={14} />
+                </button>
               </div>
-              <button
-                className="zen-btn"
-                onClick={() => setZenMode(true)}
-                title="Zen Mode (Hide UI)"
-                aria-label="Hide UI"
-              >
-                <EyeOff size={13} />
-              </button>
-            </div>
 
-            {/* Mode Navigation Buttons (Monochrome Black & White) */}
-            <div className="dock-nav-grid">
-              <button
-                className={`nav-mode-btn ${mode === 'explore' && !hotspotsOpen ? 'active' : ''}`}
-                onClick={() => {
-                  setMode('explore')
-                  setHotspotsOpen(false)
-                  setIsTsunamiPlaying(false)
-                }}
-              >
-                <Globe2 size={13} />
-                <span>Globe</span>
-              </button>
-              <button
-                className="nav-mode-btn"
-                onClick={() => {
-                  setMode('tsunami')
-                  setHotspotsOpen(false)
-                  setIsPlaying(false)
-                  setIsTsunamiPlaying(true)
-                  setSelection({ latitude: activeScenario.epicenter.latitude, longitude: activeScenario.epicenter.longitude })
-                  setTeleportNonce(Date.now())
-                }}
-              >
-                <Radio size={13} />
-                <span>Tsunami</span>
-              </button>
-              <button
-                className={`nav-mode-btn ${mode === 'dive' ? 'active' : ''} ${!boundaryContainsMarine(diveBoundary) ? 'disabled-btn' : ''}`}
-                onClick={() => {
-                  if (!boundaryContainsMarine(diveBoundary)) return
-                  setMode('dive')
-                  setHotspotsOpen(false)
-                  setIsTsunamiPlaying(false)
-                }}
-                disabled={!boundaryContainsMarine(diveBoundary)}
-                title={
-                  boundaryContainsMarine(diveBoundary)
-                    ? "Regional 3D Deep Dive"
-                    : "Selected region is inland."
-                }
-              >
-                <Compass size={13} />
-                <span>3D Dive</span>
-              </button>
-              <button
-                className={`nav-mode-btn ${hotspotsOpen ? 'active' : ''}`}
-                onClick={() => setHotspotsOpen((v) => !v)}
-                title="Browse 18 Curated Biological Upwellings, Deep Trenches & Coral Atolls"
-              >
-                <Sparkles size={13} />
-                <span>Hotspots</span>
-              </button>
-            </div>
-
-            {/* 1. Scientific Variables & Natural Earth Mode */}
-            <div className="dock-section">
+              {/* 1. Scientific Variables & Natural Earth Mode */}
+              <div className="dock-section">
               <div className="dock-section-title">
                 <Layers3 size={12} color="#ffffff" />
                 <span>OCEAN LAYERS</span>
@@ -1384,9 +1502,37 @@ export default function App() {
               </button>
             </div>
           </aside>
+        ) : (
+          <button
+            className="dock-tab-handle left glass"
+            onClick={() => setLeftDockCollapsed(false)}
+            title="Expand Layers & Controls"
+            aria-label="Expand Layers"
+          >
+            <Layers3 size={14} color="#00f2fe" />
+            <span>LAYERS</span>
+            <ChevronRight size={12} />
+          </button>
+        )}
 
-          {/* RIGHT SIDE DOCK: Timeline Playback, Area Selection & Live Telemetry Inspector */}
+        {/* RIGHT SIDE DOCK: Timeline Playback, Area Selection & Live Telemetry Inspector */}
+        {!rightDockCollapsed ? (
           <aside className="side-dock-right glass" aria-label="Timeline and Region Controls">
+            <div className="dock-panel-header">
+              <div className="dock-title-group">
+                <Activity size={14} color="#00f2fe" />
+                <span className="dock-title-text">TELEMETRY & TIMELINE</span>
+              </div>
+              <button
+                className="dock-collapse-btn"
+                onClick={() => setRightDockCollapsed(true)}
+                title="Collapse Right Panel"
+                aria-label="Collapse Right Panel"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+
             {/* 1. 25-Year Atlas Timeline */}
             <div className="dock-section">
               <div className="dock-section-title">
@@ -1532,6 +1678,16 @@ export default function App() {
                     <label>SALINITY</label>
                     <span>{telemetry.salinity_psu.toFixed(1)} PSU</span>
                   </div>
+                  <div className="tel-item">
+                    <label>TCHP (CYCLONE)</label>
+                    <span style={{ color: cycloneIndices.tchp_kj_cm2 > 60 ? '#f43f5e' : '#38bdf8', fontWeight: 700 }}>
+                      {cycloneIndices.tchp_kj_cm2.toFixed(1)} kJ/cm²
+                    </span>
+                  </div>
+                  <div className="tel-item">
+                    <label>D26 ISOTHERM</label>
+                    <span>{Math.round(cycloneIndices.d26_m)} m</span>
+                  </div>
                   {telemetry.current_speed_m_s !== undefined && (
                     <div className="tel-item" style={{ gridColumn: 'span 2' }}>
                       <label>SURFACE CURRENT</label>
@@ -1540,16 +1696,39 @@ export default function App() {
                   )}
                 </div>
 
-                <button
-                  className="view-profile-btn"
-                  onClick={() => setProfileOpen(true)}
-                  title="Open full depth profile curve modal"
-                >
-                  <Activity size={12} /> View CTD Depth Profile
-                </button>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <button
+                    className="view-profile-btn"
+                    style={{ flex: 1 }}
+                    onClick={() => setProfileOpen(true)}
+                    title="Open full depth profile curve modal"
+                  >
+                    <Activity size={12} /> CTD Profile
+                  </button>
+                  <button
+                    className="view-profile-btn"
+                    style={{ flex: 1, borderColor: 'rgba(0, 242, 254, 0.4)', color: '#00f2fe' }}
+                    onClick={() => setAnalyticsOpen((v) => !v)}
+                    title="Open Ocean-Viz Mission Analytics Suite"
+                  >
+                    <BarChart3 size={12} /> Analytics
+                  </button>
+                </div>
               </div>
             )}
           </aside>
+        ) : (
+          <button
+            className="dock-tab-handle right glass"
+            onClick={() => setRightDockCollapsed(false)}
+            title="Expand Telemetry & Timeline"
+            aria-label="Expand Right Panel"
+          >
+            <ChevronLeft size={12} />
+            <span>TELEMETRY</span>
+            <Activity size={14} color="#00f2fe" />
+          </button>
+        )}
         </>
       )}
 
@@ -1679,6 +1858,16 @@ export default function App() {
           </div>
         </aside>
       )}
+
+      {/* OceanViz-Grade Mission Analytics Suite Tray */}
+      <MissionAnalyticsTray
+        telemetry={telemetry}
+        currentDepth={depth}
+        onDepthChange={setDepth}
+        isOpen={analyticsOpen}
+        onToggle={() => setAnalyticsOpen((v) => !v)}
+        regionLabel={activeBoundary?.label || 'Bay of Bengal / North Indian Ocean'}
+      />
     </main>
   )
 }
